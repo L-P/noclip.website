@@ -147,6 +147,7 @@ import ArrayBufferSlice from './ArrayBufferSlice.js';
 const sceneGroups: (string | SceneGroup)[] = [
     "Development",
     Scenes_Example.sceneGroup,
+    Scenes_PerfectDark64.sceneGroup,
     "Wii",
     Scenes_MarioKartWii.sceneGroup,
     Scenes_KirbysReturnToDreamLand.sceneGroup,

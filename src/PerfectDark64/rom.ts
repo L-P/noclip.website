@@ -7,7 +7,7 @@ import { readString } from "../util.js";
 // util.js or something.
 function fetchDataSync(path: string): ArrayBufferSlice {
     const b: Buffer = readFileSync(path);
-    return new ArrayBufferSlice(b.buffer);
+    return ArrayBufferSlice.fromView(b);
 }
 
 /*
@@ -36,7 +36,7 @@ const compressedMagicHeader = 0x1173;
 // file should be automatically and _optionally_ decompressed when read.
 // Despite this behaviour compressed files larger than their uncompressed data
 // can be found.
-function decompress(buf: ArrayBufferSlice): ArrayBufferSlice {
+export function decompress(buf: ArrayBufferSlice): ArrayBufferSlice {
     const view = buf.createDataView();
     if (view.getUint16(0) !== compressedMagicHeader) {
         throw new Error("compressed data does not start with magic number 0x1173");
@@ -48,7 +48,7 @@ function decompress(buf: ArrayBufferSlice): ArrayBufferSlice {
         throw new Error("decompressed data size doesn't match header");
     }
 
-    return new ArrayBufferSlice(decompressed.buffer);
+    return ArrayBufferSlice.fromView(decompressed);
 }
 
 // PD64 assets are stored into named files, sometimes the contents are
@@ -58,8 +58,8 @@ function decompress(buf: ArrayBufferSlice): ArrayBufferSlice {
 // Don't attempt to read from offset to offset+size directly, the data must go
 // through decompress first.
 interface FileEntry {
-    offset: uint32; // offset into ROM
-    size: uint32; // raw size in ROM
+    offset: number; // uint32, offset into ROM
+    size: number; // uint32, raw size in ROM
     name: string;
 }
 
@@ -134,7 +134,7 @@ function readFileTable(rom: ArrayBufferSlice, databin: ArrayBufferSlice): FileEn
 }
 
 export default class ROM {
-    private rom: ArrayBufferSlice;
+    private readonly rom: ArrayBufferSlice;
     public readonly files: FileEntry[];
 
     constructor(path: string) {
@@ -151,7 +151,7 @@ export default class ROM {
             throw new Error(`File not found: ${path}`);
         }
 
-        const raw = this.rom.slice(entry.offset, entry.offset + entry.size);
+        const raw = this.rom.subarray(entry.offset, entry.size);
         const view = raw.createDataView();
         // Uncompressed file, return as-is.
         if (view.getUint16(0) !== compressedMagicHeader) {

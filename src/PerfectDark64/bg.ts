@@ -56,13 +56,17 @@ const magicOffset = 0x0F000000;
 
 // Matches the struct on ROM.
 interface BGRoomEntry {
-    roomOffset: number; // offset into section 1, almost, see loadRooms.
-    pos: vec3;
+    // offset into section 1, almost. This offset is sprinkled over many
+    // pointers, since it always needs to be substracted before these pointers
+    // we do it when first loading them to avoid repeating ourselves.
+    roomOffset: number;
+    pos: vec3; // [3]float32
 
     // FIXME: Unused for now, waiting for the renderer.
-    brightnessMin: number;
-    brightnessMax: number;
+    brightnessMin: number; // uint8
+    brightnessMax: number; // uint8
 }
+const bgRoomEntryStructSize = 20;
 
 // Rooms are the are the basic building block of a pd64 level. The original
 // renderer renders the room you're at and any other room visible through the
@@ -78,23 +82,26 @@ interface Room {
     // and keep our array clean of empty entries and canary values.
     number: number;
 
-    // Raw vertices, loaded into the RSP the 0x0E segment.
+    // Raw vertices, loaded as-is into the RSP the 0x0E segment.
     vertices: Vertex[];
+
+    blocks: Block[];
 }
 
 // Matches the struct on ROM.
 interface RoomGFXDataHeader {
     // Pointers into decompressed roomgfxdata.
-    verticesPtr:          number,
-    coloursPtr:           number,
-    opaqueBlocksPtr:      number,
-    translucentBlocksPtr: number,
+    verticesPtr:          number, // uint32
+    coloursPtr:           number, // uint32
+    opaqueBlocksPtr:      number, // uint32
+    translucentBlocksPtr: number, // uint32
 
-    lightsIndex:          number,
-    numLights:            number,
-    numVertices:          number, // computed after loading
-    numColours:           number, // computed after loading
+    lightsIndex:          number, // int16
+    numLights:            number, // int16
+    numVertices:          number, // int16, computed after loading
+    numColours:           number, // int16, computed after loading
 }
+const roomGFXDataHeaderStructSize = 24;
 
 function readRoomGFXDataHeader(view: DataView, roomOffset: number): RoomGFXDataHeader {
     let header:RoomGFXDataHeader = {
@@ -102,10 +109,10 @@ function readRoomGFXDataHeader(view: DataView, roomOffset: number): RoomGFXDataH
         coloursPtr:           view.getUint32(4),
         opaqueBlocksPtr:      view.getUint32(8),
         translucentBlocksPtr: view.getUint32(12),
-        lightsIndex:          view.getUint16(16),
-        numLights:            view.getUint16(18),
-        numVertices:          view.getUint16(20),
-        numColours:           view.getUint16(22),
+        lightsIndex:          view.getInt16(16),
+        numLights:            view.getInt16(18),
+        numVertices:          view.getInt16(20),
+        numColours:           view.getInt16(22),
     };
 
     const offset = roomOffset + magicOffset;
@@ -116,6 +123,79 @@ function readRoomGFXDataHeader(view: DataView, roomOffset: number): RoomGFXDataH
     header.translucentBlocksPtr -= header.translucentBlocksPtr === 0 ? 0 : offset;
 
     return header;
+}
+
+enum RoomBlockType {
+    Leaf   = 0,
+    Parent = 1,
+}
+
+// Matches the struct on ROM.
+interface Block {
+    Type: RoomBlockType; // uint8
+    // Three 0xFF bytes of padding.
+    NextPtr: number; // int32
+
+    // RoomBlockType.Leaf
+    GDLPtr: number; // int32
+    VerticesPtr: number; // int32
+    ColoursPtr: number; // int32
+
+    // RoomBlockType.Parent
+    ChildPtr: number; // int32
+    Unk0C: number; // int32 // "pointer to 2 coords at least" per decomp comment.
+}
+const roomBlockStructSize = 20
+
+function loadBlock(view: DataView, roomOffset: number): Block {
+    let ret: Block = {
+        Type: view.getUint8(0),
+        NextPtr: view.getUint32(4),
+
+        GDLPtr: view.getUint32(8),
+        VerticesPtr: view.getUint32(12),
+        ColoursPtr: view.getUint32(16),
+
+        // Also read the block as if it was a Parent.
+        ChildPtr: view.getUint32(8),
+        Unk0C: view.getUint32(12),
+    };
+
+    for (const key in ret) {
+        if (key === "Type") {
+            continue;
+        }
+
+        if (ret[key] !== 0) {
+            ret[key] -= magicOffset + roomOffset;
+        }
+    }
+
+    return ret;
+}
+
+function loadRoomGFXDataBlocks(header: RoomGFXDataHeader, roomOffset: number, data: ArrayBufferSlice): Block[] {
+    const ret: Block[] = [];
+    let offset = roomGFXDataHeaderStructSize;
+    let end = header.verticesPtr;
+
+    const offsetToIndex: number[] = [];
+
+    // The first entry is not skipped for a change.
+    for (let offset = roomGFXDataHeaderStructSize; offset < end; offset += roomBlockStructSize) {
+        const block = loadBlock(
+            data.subarray(offset, roomBlockStructSize).createDataView(),
+            roomOffset,
+        );
+
+        if (block.Type === RoomBlockType.Parent && block.VerticesPtr < end) {
+            end = block.VerticesPtr;
+        }
+
+        ret.push(block);
+    }
+
+    return ret;
 }
 
 function loadRoomGFXDataVertices(header: RoomGFXDataHeader, view: DataView): Vertex[] {
@@ -162,14 +242,12 @@ function loadRooms(
         ret.push({
             number: i,
             vertices: loadRoomGFXDataVertices(gfxDataHeader, gfxView),
+            blocks: loadRoomGFXDataBlocks(gfxDataHeader, bgRoom.roomOffset, gfx),
         });
     });
 
     return ret;
 }
-
-const roomGFXDataHeaderSize = 24;
-const bgRoomEntryStructSize = 20;
 
 function loadBGRoomTable(primary: ArrayBufferSlice): BGRoomEntry[] {
     const view = primary.createDataView();

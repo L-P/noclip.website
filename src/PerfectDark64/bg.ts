@@ -2,11 +2,11 @@ import ArrayBufferSlice from "../ArrayBufferSlice.js";
 import { assert, hexzero0x, readString } from "../util.js";
 import { decompress } from "./rom.js";
 import { vec3 } from "gl-matrix";
-import { Vertex, vertexStructSize } from "./ultra64.js";
+import { gfxStructSize, loadVertexFromView, GFX, Command, Vertex, vertexStructSize } from "./f3dex.js";
 
 /**
- * BGs (assumed to stand for "background") contains the level geometry as
- * packed vertices/colours and display lists in a cascading mess of offsets,
+ * BGs (assumed to stand for "background geometry") contains the level geometry
+ * as packed vertices/colours and display lists in a cascading mess of offsets,
  * trees, and lists that accommodate F3DEX and pd64's room->portal->room
  * renderer reminiscing of a simplified BSP renderer.
  * The path to the packed data and display lists is BGRoom->Room->n Block->gdl.
@@ -98,8 +98,8 @@ interface RoomGFXDataHeader {
 
     lightsIndex:          number, // int16
     numLights:            number, // int16
-    numVertices:          number, // int16, computed after loading
-    numColours:           number, // int16, computed after loading
+    numVertices:          number, // int16, computed after loading, we don't use this
+    numColours:           number, // int16, computed after loading, we don't use this
 }
 const roomGFXDataHeaderStructSize = 24;
 
@@ -116,10 +116,9 @@ function readRoomGFXDataHeader(view: DataView, roomOffset: number): RoomGFXDataH
     };
 
     const offset = roomOffset + magicOffset;
-
-    header.verticesPtr -= header.verticesPtr === 0 ? 0 : offset;
-    header.coloursPtr -= header.coloursPtr === 0 ? 0 : offset;
-    header.opaqueBlocksPtr -= header.opaqueBlocksPtr === 0 ? 0 : offset;
+    header.verticesPtr          -= header.verticesPtr          === 0 ? 0 : offset;
+    header.coloursPtr           -= header.coloursPtr           === 0 ? 0 : offset;
+    header.opaqueBlocksPtr      -= header.opaqueBlocksPtr      === 0 ? 0 : offset;
     header.translucentBlocksPtr -= header.translucentBlocksPtr === 0 ? 0 : offset;
 
     return header;
@@ -130,22 +129,40 @@ enum RoomBlockType {
     Parent = 1,
 }
 
-// Matches the struct on ROM.
 interface Block {
+    // {{{ Matches the struct on ROM.
     Type: RoomBlockType; // uint8
     // Three 0xFF bytes of padding.
     NextPtr: number; // int32
 
-    // RoomBlockType.Leaf
+    // union RoomBlockType.Leaf
     GDLPtr: number; // int32
     VerticesPtr: number; // int32
     ColoursPtr: number; // int32
 
-    // RoomBlockType.Parent
+    // union RoomBlockType.Parent
     ChildPtr: number; // int32
     Unk0C: number; // int32 // "pointer to 2 coords at least" per decomp comment.
+    // }}
+
+    GDLs: GFX[];
 }
 const roomBlockStructSize = 20
+
+function loadBlockGDLs(view: DataView): GFX[] {
+    var ret: GFX[] = [];
+
+    for (let i = 0; ; i += gfxStructSize) {
+        const gfx = GFX.readFromView(view, i);
+        ret.push(gfx);
+
+        if (gfx.command() === Command.G_ENDDL) {
+            break;
+        }
+    }
+
+    return ret;
+}
 
 function loadBlock(view: DataView, roomOffset: number): Block {
     let ret: Block = {
@@ -159,22 +176,20 @@ function loadBlock(view: DataView, roomOffset: number): Block {
         // Also read the block as if it was a Parent.
         ChildPtr: view.getUint32(8),
         Unk0C: view.getUint32(12),
+
+        GDLs: null,
     };
 
-    for (const key in ret) {
-        if (key === "Type") {
-            continue;
-        }
-
-        if (ret[key] !== 0) {
-            ret[key] -= magicOffset + roomOffset;
-        }
-    }
+    const offset = magicOffset + roomOffset;
+    ret.NextPtr     -= ret.NextPtr     === 0 ? 0 : offset;
+    ret.GDLPtr      -= ret.GDLPtr      === 0 ? 0 : offset;
+    ret.VerticesPtr -= ret.VerticesPtr === 0 ? 0 : offset;
+    ret.ColoursPtr  -= ret.ColoursPtr  === 0 ? 0 : offset;
 
     return ret;
 }
 
-function loadRoomGFXDataBlocks(header: RoomGFXDataHeader, roomOffset: number, data: ArrayBufferSlice): Block[] {
+function loadRoomGFXDataBlocks(header: RoomGFXDataHeader, roomOffset: number, gfx: ArrayBufferSlice): Block[] {
     const ret: Block[] = [];
     let offset = roomGFXDataHeaderStructSize;
     let end = header.verticesPtr;
@@ -184,9 +199,13 @@ function loadRoomGFXDataBlocks(header: RoomGFXDataHeader, roomOffset: number, da
     // The first entry is not skipped for a change.
     for (let offset = roomGFXDataHeaderStructSize; offset < end; offset += roomBlockStructSize) {
         const block = loadBlock(
-            data.subarray(offset, roomBlockStructSize).createDataView(),
+            gfx.subarray(offset, roomBlockStructSize).createDataView(),
             roomOffset,
         );
+
+        if (block.Type === RoomBlockType.Leaf) {
+            block.GDLs = loadBlockGDLs(gfx.slice(block.GDLPtr).createDataView());
+        }
 
         if (block.Type === RoomBlockType.Parent && block.VerticesPtr < end) {
             end = block.VerticesPtr;
@@ -204,16 +223,7 @@ function loadRoomGFXDataVertices(header: RoomGFXDataHeader, view: DataView): Ver
 
     for (let i = 0; i < count; i++) {
         const offset = header.verticesPtr + (i * vertexStructSize);
-
-        ret.push({
-            x:      view.getInt16(offset),
-            y:      view.getInt16(offset + 2),
-            z:      view.getInt16(offset + 4),
-            flags:  view.getUint8(offset + 6),
-            colour: view.getUint8(offset + 7),
-            s:      view.getInt16(offset + 8),
-            t:      view.getInt16(offset + 10),
-        });
+        ret.push(loadVertexFromView(view, offset));
     }
 
     return ret;

@@ -1,8 +1,9 @@
-import ArrayBufferSlice from "../ArrayBufferSlice.js";
-import { assert, hexzero0x, readString } from "../util.js";
-import { decompress } from "./rom.js";
+import ArrayBufferSlice from "../ArrayBufferSlice";
+import { assert, hexzero0x, readString } from "../util";
 import { vec3 } from "gl-matrix";
-import { gfxStructSize, loadVertexFromView, GFX, Command, Vertex, vertexStructSize } from "./f3dex.js";
+
+import { gfxStructSize, loadVertexFromView, GFX, Command, Vertex, vertexStructSize } from "./f3dex";
+import { Inflater } from "./rom";
 
 /**
  * BGs (assumed to stand for "background geometry") contains the level geometry
@@ -177,7 +178,7 @@ function loadBlock(view: DataView, roomOffset: number): Block {
         ChildPtr: view.getUint32(8),
         Unk0C: view.getUint32(12),
 
-        GDLs: null,
+        GDLs: Array<GFX>(),
     };
 
     const offset = magicOffset + roomOffset;
@@ -233,6 +234,7 @@ function loadRooms(
     seg: ArrayBufferSlice,
     bgRooms: BGRoomEntry[],
     baseOffset: number,
+    decompress: Inflater,
 ): Room[] {
     const ret: Room[] = [];
 
@@ -288,7 +290,7 @@ function loadBGRoomTable(primary: ArrayBufferSlice): BGRoomEntry[] {
 export class BGSegment {
     public readonly rooms: Room[];
 
-    constructor(seg: ArrayBufferSlice) {
+    constructor(seg: ArrayBufferSlice, decompress: Inflater) {
         const view = seg.createDataView();
 
         const primSize = view.getUint32(0);
@@ -304,6 +306,10 @@ export class BGSegment {
         // The roomOffset pointing to each Room compressed data is itself
         // offset by this value. I can't make sense of it, but it works.
         const roomsOffset = primSize - compPrimSize - 0x0C;
-        this.rooms = loadRooms(seg, bgRooms, roomsOffset);
+        this.rooms = loadRooms(seg, bgRooms, roomsOffset, decompress);
+    }
+
+    static fromJSON(buffer: ArrayBufferSlice): BGSegment {
+        return JSON.parse(new TextDecoder().decode(buffer.arrayBuffer));
     }
 }

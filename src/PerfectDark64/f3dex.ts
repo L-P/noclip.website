@@ -1,4 +1,4 @@
-import { assert } from "../util.js";
+import { assert } from "../util";
 
 export interface Vertex {
     x:      number; // uint16

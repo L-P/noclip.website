@@ -1,7 +1,6 @@
-import ArrayBufferSlice from "../ArrayBufferSlice.js";
-import { inflateRawSync } from 'zlib';
+import ArrayBufferSlice from "../ArrayBufferSlice";
 import { readFileSync } from "fs";
-import { readString } from "../util.js";
+import { readString } from "../util";
 
 // FIXME: This has been copy-pasted everywhere, it's maybe time to move it to
 // util.js or something.
@@ -24,32 +23,6 @@ const compressedDatabinOffset = 0x39850;
 
 // Offset into decompressed "data" section.
 const filesTableOffset = 0x28080;
-
-const compressedMagicHeader = 0x1173;
-
-// pd64 uses zlib-compressed data with a custom header:
-//   uint16 magic string
-//   uint24 decompressed size
-//   []byte zlib-compressed data
-// There's no compressed data size, only zlib knows when to stop.
-// The decompression routine in pd64 also works on uncompressed data so every
-// file should be automatically and _optionally_ decompressed when read.
-// Despite this behaviour compressed files larger than their uncompressed data
-// can be found.
-export function decompress(buf: ArrayBufferSlice): ArrayBufferSlice {
-    const view = buf.createDataView();
-    if (view.getUint16(0) !== compressedMagicHeader) {
-        throw new Error("compressed data does not start with magic number 0x1173");
-    }
-
-    const expectedDecompressedSize = view.getUint32(2) >> 8;
-    const decompressed = inflateRawSync(buf.createTypedArray(Uint8Array, 5));
-    if (expectedDecompressedSize !== decompressed.length) {
-        throw new Error("decompressed data size doesn't match header");
-    }
-
-    return ArrayBufferSlice.fromView(decompressed);
-}
 
 // PD64 assets are stored into named files, sometimes the contents are
 // compressed, sometimes not, sometimes files wrap multiple section of
@@ -133,11 +106,13 @@ function readFileTable(rom: ArrayBufferSlice, databin: ArrayBufferSlice): FileEn
     return ret.slice(1); // Skip the first empty entry.
 }
 
+export type Inflater = (raw: ArrayBufferSlice) => ArrayBufferSlice;
+
 export default class ROM {
     private readonly rom: ArrayBufferSlice;
     public readonly files: FileEntry[];
 
-    constructor(path: string) {
+    constructor(path: string, public readonly decompress: Inflater) {
         this.rom = fetchDataSync(path);
         const databin = decompress(this.rom.subarray(compressedDatabinOffset));
         this.files = readFileTable(this.rom, databin);
@@ -152,12 +127,6 @@ export default class ROM {
         }
 
         const raw = this.rom.subarray(entry.offset, entry.size);
-        const view = raw.createDataView();
-        // Uncompressed file, return as-is.
-        if (view.getUint16(0) !== compressedMagicHeader) {
-            return raw;
-        }
-
-        return decompress(raw);
+        return this.decompress(raw);
     }
 }

@@ -118,6 +118,7 @@ import * as Scenes_PaperMarioTheOrigamiKing from './PaperMarioTheOrigamiKing/sce
 import * as Scenes_NarutoGNT4 from './NarutoGNT4/scenes.js'
 import * as Scenes_KingdomHeartsDDD from './KingdomHeartsDDD/scenes.js';
 import * as Scenes_KingdomHeartsBBS from './KingdomHeartsDDD/scenes_bbs.js';
+import * as Scenes_PerfectDark64 from './PerfectDark64/scenes.js';
 
 import { DroppedFileSceneDesc, traverseFileSystemDataTransfer } from './Scenes_FileDrops.js';
 

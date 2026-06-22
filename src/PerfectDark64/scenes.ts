@@ -1,23 +1,140 @@
-import { IS_DEVELOPMENT } from "../BuildVersion";
-import { GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxCullMode, GfxDevice, GfxFormat, GfxInputLayout, GfxMipFilterMode, GfxProgram, GfxSampler, GfxTexFilterMode, GfxTexture, GfxVertexBufferFrequency, GfxWrapMode, makeTextureDescriptor2D } from "../gfx/platform/GfxPlatform";
-import { SceneContext } from "../SceneBase";
 import * as Viewer from "../viewer";
+import { FakeTextureHolder, TextureHolder } from "../TextureHolder";
+import { mat4 } from "gl-matrix";
+import { GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxCullMode, GfxDevice, GfxFormat, GfxInputLayout, GfxMipFilterMode, GfxProgram, GfxSampler, GfxTexFilterMode, GfxTexture, GfxVertexBufferFrequency, GfxWrapMode, makeTextureDescriptor2D } from "../gfx/platform/GfxPlatform";
+import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
+import { GfxrAttachmentSlot } from "../gfx/render/GfxRenderGraph";
+import { IS_DEVELOPMENT } from "../BuildVersion";
+import { SceneContext } from "../SceneBase";
+import { fillMatrix4x3, fillMatrix4x4, fillVec4 } from "../gfx/helpers/UniformBufferHelpers";
+import { makeBackbufferDescSimple, makeAttachmentClearDescriptor, opaqueBlackFullClearRenderPassDescriptor } from '../gfx/helpers/RenderGraphHelpers.js';
+import { makeSortKey, GfxRendererLayer, GfxRenderInst, GfxRenderInstList } from "../gfx/render/GfxRenderInstManager";
+
+import { Program } from "./shaders";
 import ROM from "./rom";
 import { BGSegment} from "./bg";
+import { GFX, Segment, Mesh, MeshBuilder, DisplayListMeshBuilder } from "./f3dex";
 
 const pathBase = `PerfectDark64`;
 
 class Scene implements Viewer.SceneGfx {
+    public renderHelper: GfxRenderHelper;
+
+    private renderInstList = new GfxRenderInstList();
+    private mesh: MeshBuilder;
+    private program: GfxProgram;
+    private linearSampler: GfxSampler;
+
     constructor(
-        private sceneContext: SceneContext,
-        private readonly seg: BGSegment,
+        device: GfxDevice,
+        public textureHolder: TextureHolder,
+        seg: BGSegment,
     ) {
+        this.renderHelper = new GfxRenderHelper(device);
+        const cache = this.renderHelper.renderCache;
+
+        this.mesh = this.buildMesh(device, seg);
+        this.program = cache.createProgram(new Program());
+        this.linearSampler = cache.createSampler({
+            minFilter: GfxTexFilterMode.Bilinear,
+            magFilter: GfxTexFilterMode.Bilinear,
+            mipFilter: GfxMipFilterMode.Nearest,
+            wrapS: GfxWrapMode.Clamp,
+            wrapT: GfxWrapMode.Clamp,
+        });
+    }
+
+    public buildMesh(device: GfxDevice, seg: BGSegment): MeshBuilder {
+        var builder = new DisplayListMeshBuilder();
+
+        seg.rooms.forEach(room => {
+            builder.setSegmentVertices(Segment.BGVTX, room.vertices);
+
+            room.blocks.forEach(block => {
+                builder.offset.x = room.pos.x;
+                builder.offset.y = room.pos.y;
+                builder.offset.z = room.pos.z;
+
+                block.GDLs.forEach(gdl => {
+                    builder.processGFX(new GFX(
+                        gdl.w0,
+                        gdl.w1,
+                    ));
+                });
+            });
+
+        });
+
+        builder.build(device, this.renderHelper.renderCache);
+
+        return builder;
     }
 
     public render(device: GfxDevice, viewerInput: Viewer.ViewerRenderInput): void {
+        this.renderHelper.debugDraw.beginFrame(viewerInput.camera.projectionMatrix, viewerInput.camera.viewMatrix, viewerInput.backbufferWidth, viewerInput.backbufferHeight);
+
+        const renderInstManager = this.renderHelper.renderInstManager;
+        const mainColorDesc = makeBackbufferDescSimple(GfxrAttachmentSlot.Color0, viewerInput, opaqueBlackFullClearRenderPassDescriptor);
+        const mainDepthDesc = makeBackbufferDescSimple(GfxrAttachmentSlot.DepthStencil, viewerInput, opaqueBlackFullClearRenderPassDescriptor);
+        const builder = this.renderHelper.renderGraph.newGraphBuilder();
+
+        const template = this.renderHelper.pushTemplateRenderInst();
+        template.setBindingLayouts([{
+            numSamplers: 1,
+            numUniformBuffers: 1,
+        }]);
+
+        this.renderMesh(this.mesh, viewerInput, template);
+
+        const mainColorTargetID = builder.createRenderTargetID(mainColorDesc, 'Main Color');
+        const mainDepthTargetID = builder.createRenderTargetID(mainDepthDesc, 'Main Depth');
+        builder.pushPass(pass => {
+            pass.setDebugName("Main");
+            pass.attachRenderTargetID(GfxrAttachmentSlot.Color0, mainColorTargetID);
+            pass.attachRenderTargetID(GfxrAttachmentSlot.DepthStencil, mainDepthTargetID);
+            pass.exec(passRenderer => {
+                this.renderInstList.drawOnPassRenderer(this.renderHelper.renderCache, passRenderer);
+            });
+        });
+        this.renderHelper.renderInstManager.popTemplate();
+
+        this.renderHelper.antialiasingSupport.pushPasses(builder, viewerInput, mainColorTargetID);
+        builder.resolveRenderTargetToExternalTexture(mainColorTargetID, viewerInput.onscreenTexture);
+        this.renderHelper.prepareToRender();
+        builder.execute();
+        this.renderInstList.reset();
+    }
+
+    public renderMesh(mesh: Mesh, viewerInput: Viewer.ViewerRenderInput , template: GfxRenderInst): void {
+        const data = template.allocateUniformBufferF32(Program.ub_SceneParams, (4*4) + (3*4) );
+        let offs = 0;
+        offs += fillMatrix4x4(data, offs, viewerInput.camera.clipFromWorldMatrix);
+
+        let mat = mat4.create();
+        offs += fillMatrix4x3(data, offs, mat);
+
+        const renderInst = this.renderHelper.renderInstManager.newRenderInst();
+        renderInst.setGfxProgram(this.program);
+        renderInst.setSamplerBindings(0, [{
+            gfxTexture: null,
+            gfxSampler: this.linearSampler,
+        }]);
+
+        renderInst.setVertexInput(
+            mesh.inputLayout,
+            [{ buffer: mesh.vertexBuffer, byteOffset: 0 }],
+            { buffer: mesh.indexBuffer, byteOffset: 0 },
+        );
+
+        renderInst.setDrawCount(mesh.indexCount);
+        renderInst.setMegaStateFlags({ cullMode: GfxCullMode.Back });
+        this.renderInstList.submitRenderInst(renderInst);
     }
 
     public destroy(device: GfxDevice): void {
+        this.mesh.destroy(device);
+        this.renderHelper.destroy();
+        this.textureHolder.destroy(device);
     }
 }
 
@@ -32,7 +149,10 @@ class SceneDesc implements Viewer.SceneDesc {
     public async createScene(device: GfxDevice, sceneContext: SceneContext): Promise<Viewer.SceneGfx> {
         const bgJSON = await sceneContext.dataFetcher.fetchData(`${pathBase}/${this.bgSegmentPath}.json`);
 
-        return new Scene(sceneContext, BGSegment.fromJSON(bgJSON));
+        const viewerTextures: Viewer.Texture[] = [];
+        const fakeTextureHolder = new FakeTextureHolder(viewerTextures);
+
+        return new Scene(device, fakeTextureHolder, BGSegment.fromJSON(bgJSON));
     }
 }
 

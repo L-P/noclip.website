@@ -83,6 +83,8 @@ interface Room {
     // and keep our array clean of empty entries and canary values.
     number: number;
 
+    pos: Vertex;
+
     // Raw vertices, loaded as-is into the RSP the 0x0E segment.
     vertices: Vertex[];
 
@@ -255,6 +257,13 @@ function loadRooms(
             number: i,
             vertices: loadRoomGFXDataVertices(gfxDataHeader, gfxView),
             blocks: loadRoomGFXDataBlocks(gfxDataHeader, bgRoom.roomOffset, gfx),
+            pos: {
+                x: bgRoom.pos[0],
+                y: bgRoom.pos[1],
+                z: bgRoom.pos[2],
+                s: 0,
+                t: 0,
+            }
         });
     });
 

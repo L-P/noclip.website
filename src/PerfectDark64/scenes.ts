@@ -48,14 +48,14 @@ class Scene implements Viewer.SceneGfx {
         var builder = new DisplayListMeshBuilder();
 
         seg.rooms.forEach(room => {
-            builder.setSegmentVertices(Segment.BGVTX, room.vertices);
+            builder.setSegmentVertices(Segment.BGVtx, room.vertices);
+            builder.setSegmentColours(Segment.BGCol, room.colours);
+            builder.offset.x = room.pos.x;
+            builder.offset.y = room.pos.y;
+            builder.offset.z = room.pos.z;
 
             room.blocks.forEach(block => {
-                builder.offset.x = room.pos.x;
-                builder.offset.y = room.pos.y;
-                builder.offset.z = room.pos.z;
-
-                block.GDLs.forEach(gdl => {
+                block.gdls.forEach(gdl => {
                     builder.processGFX(new GFX(
                         gdl.w0,
                         gdl.w1,

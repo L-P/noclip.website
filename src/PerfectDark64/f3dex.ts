@@ -9,11 +9,21 @@ export interface Vertex {
     x:      number; // uint16
     y:      number; // uint16
     z:      number; // uint16
-    // flags:  number; // uint8 // maybe unused, TODO
-    // colour: number; // uint8
+    flags:  number; // uint8
+    colour: number; // uint8
     s:      number; // uint16
     t:      number; // uint16
 };
+export const vertexStructSize = 12;
+const vertexElementsCount = 7;
+
+interface ComputedVertex extends Vertex {
+    cr: number; // uint8, color/normal
+    cg: number; // uint8, color/normal
+    cb: number; // uint8, color/normal
+    ca: number; // uint8, color/normal
+}
+const computedVertexElementsCount = 5 + 4; // no flags/colour in vertex buffer
 
 export interface Colour {
     r: number; // uint8
@@ -28,21 +38,29 @@ export function loadVertexFromView(view: DataView, offset: number): Vertex {
         x:      view.getInt16(offset),
         y:      view.getInt16(offset + 2),
         z:      view.getInt16(offset + 4),
-        // flags:  view.getUint8(offset + 6),
-        // colour: view.getUint8(offset + 7),
+        flags:  view.getUint8(offset + 6),
+        colour: view.getUint8(offset + 7),
         s:      view.getInt16(offset + 8),
         t:      view.getInt16(offset + 10),
     };
 }
 
-export const vertexStructSize = 12;
-
 export enum Command {
-    G_VTX        = 4,   // 0x04
-	// Not a real command, used in stored assets and unpacks to multiple commands.
-    G_PDTEXASSET = -64, // 0xC0
-    G_ENDDL      = -72, // 0xB8
-    G_TRI4       = -79,
+    G_SPNOOP            = 0x00,
+    G_VTX               = 0x04,
+    G_COL               = 0x07,// like  G_VTX but for vertex colours.
+	// Used in stored assets and unpacks to multiple commands.
+    G_NOOP              = 0xC0,
+    G_TRI1              = 0xBF,
+    G_ENDDL             = 0xB8,
+    G_SETGEOMETRYMODE   = 0xB7,
+    G_CLEARGEOMETRYMODE = 0xB6,
+    G_TRI4              = 0xB1,
+
+	G_RDPFULLSYNC     = 0xE9,
+	G_RDPTILESYNC     = 0xE8,
+	G_RDPPIPESYNC     = 0xE7,
+	G_RDPLOADSYNC     = 0xE6,
 }
 
 export enum Segment {
@@ -53,8 +71,24 @@ export enum Segment {
     ModelCol1 = 5,
     ModelCol2 = 6,
     BGCol     = 13,
-    BGVTX     = 14, // 0x0E
+    BGVtx     = 14, // 0x0E
     BGDL      = 15,
+}
+
+enum GeometryMode {
+    G_ZBUFFER            = 0x00000001,
+    G_SHADE              = 0x00000004,
+    G_TEXTURE_ENABLE     = 0x00000002,
+    G_SHADING_SMOOTH     = 0x00000200,
+    G_CULL_FRONT         = 0x00001000,
+    G_CULL_BACK          = 0x00002000,
+    G_CULL_BOTH          = 0x00003000,
+    G_FOG                = 0x00010000,
+    G_LIGHTING           = 0x00020000,
+    G_TEXTURE_GEN        = 0x00040000,
+    G_TEXTURE_GEN_LINEAR = 0x00080000,
+    G_LOD                = 0x00100000,
+    G_CLIPPING           = 0x00000000,
 }
 
 function bitfield(v: number, pos: number, width: number): number {
@@ -77,7 +111,6 @@ export class GFX {
         return bitfield(this.w1, pos, width)
     }
 
-
     public static readFromView(view: DataView, offset: number): GFX {
         return new GFX(
             view.getUint32(offset),
@@ -86,11 +119,7 @@ export class GFX {
     }
 
     public command(): Command {
-        const cmd = (this.w0 >> 24) & 0xFF;
-
-        // This "signs" the byte. I hate JS.
-        // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/Right_shift
-        return cmd << 24 >> 24;
+        return (this.w0 >> 24) & 0xFF;
     }
 }
 export const gfxStructSize = 8;
@@ -103,7 +132,7 @@ export interface Mesh {
 }
 
 export class MeshBuilder implements Mesh {
-    public vertices: Vertex[] = [];
+    public vertices: ComputedVertex[] = [];
     public indices: number[] = [];
 
     // Available after build() has been called.
@@ -112,7 +141,7 @@ export class MeshBuilder implements Mesh {
     public indexBuffer: GfxBuffer;
     public indexCount: number;
 
-    public pushFace(verts: Vertex[]): void {
+    public pushFace(verts: ComputedVertex[]): void {
         const last = this.vertices.length;
         this.vertices.push(...verts);
         this.indices.push(...verts.map((_, i) => last+i));
@@ -124,11 +153,15 @@ export class MeshBuilder implements Mesh {
     }
 
     public build(device: GfxDevice, cache: GfxRenderCache): void {
-        const vertexArray = new Float32Array(this.vertices.length * 5);
+        const vertexArray = new Float32Array(this.vertices.length * computedVertexElementsCount);
         this.vertices.forEach((v, i) => {
             vertexArray.set(
-                [v.x, v.y, v.z, v.s, v.t],
-                i * 5,
+                [
+                    v.x, v.y, v.z,
+                    v.s, v.t,
+                    v.cr, v.cg, v.cb, v.ca,
+                ],
+                i * computedVertexElementsCount,
             );
         });
         this.vertices = [];
@@ -154,55 +187,71 @@ export class MeshBuilder implements Mesh {
                 {
                     location: Program.a_TexCoord,
                     format: GfxFormat.F32_RG,
-                    bufferByteOffset: 3 * 4,
+                    bufferByteOffset: 3*4,
+                    bufferIndex: 0,
+                },
+                {
+                    location: Program.a_VertexColors,
+                    format: GfxFormat.F32_RGBA,
+                    bufferByteOffset: 5*4,
                     bufferIndex: 0,
                 },
             ],
 
-            vertexBufferDescriptors: [
-                {
-                    byteStride: 5 * 4,
-                    frequency: GfxVertexBufferFrequency.PerVertex,
-                },
-            ],
+            vertexBufferDescriptors: [{
+                byteStride: computedVertexElementsCount * 4,
+                frequency: GfxVertexBufferFrequency.PerVertex,
+            }],
 
             indexBufferFormat: GfxFormat.U16_R,
         });
     }
 }
 
+interface SegmentAddress {
+    segment: Segment;
+    address: number;
+}
 
-function segAddr(addr: number): number {
-    const seg = (addr & 0xFF000000) >> 24;
-    assert(seg == Segment.BGVTX);
-    return addr & 0x00FFFFFF;
+function segAddr(addr: number): SegmentAddress {
+    return {
+        segment: (addr & 0xFF000000) >> 24,
+        address: addr & 0x00FFFFFF,
+    };
 }
 
 export class DisplayListMeshBuilder extends MeshBuilder {
     private vtxSegments: Vertex[][] = [];
-    private vtxCache: Vertex[][] = [];
+    private colSegments: Colour[][] = [];
+    private vtxCache: Vertex[] = Array<Vertex>(16);
+    private colCache: Colour[] = [];
+    private geometryMode: GeometryMode = 0; // bitflags
 
     public offset: Vertex = {
-        x: 0, y: 0, z: 0, s: 0, t: 0,
+        x: 0, y: 0, z: 0, flags: 0, colour: 0, s: 0, t: 0,
     }; // DEBUG
 
     constructor() {
         super();
 
-        this.vtxCache[Segment.BGVTX] = [];
-        this.vtxCache[Segment.BGVTX].fill({
-            x:      0,
-            y:      0,
-            z:      0,
-            s:      0,
-            t:      0,
-        }, 0, 16);
+        this.vtxSegments[Segment.BGVtx] = [];
+        this.colSegments[Segment.BGCol] = [];
     }
 
-    public setSegmentVertices(segment: Segment, vtx: Vertex[]): void {
+    public setSegmentVertices(segment: Segment, vertices: Vertex[]): void {
         switch(segment) {
-            case Segment.BGVTX:
-                this.vtxSegments[Segment.BGVTX] = vtx;
+            case Segment.BGVtx:
+                this.vtxSegments[segment] = vertices;
+                break;
+            default:
+                throw new Error(`Unexpected segment: ` + hexzero0x(segment));
+        }
+    }
+
+    public setSegmentColours(segment: Segment, colours: Colour[]): void {
+        switch(segment) {
+            case Segment.BGCol:
+                this.colSegments[segment] = colours;
                 break;
             default:
                 throw new Error(`Unexpected segment: ` + hexzero0x(segment));
@@ -211,36 +260,74 @@ export class DisplayListMeshBuilder extends MeshBuilder {
 
     public processGFX(gfx: GFX): void {
         switch(gfx.command()) {
+            case Command.G_ENDDL:
+                return;
             case Command.G_VTX:
                 this.gSPVertex(gfx);
+                break;
+            case Command.G_TRI1:
+                this.gSPTri(
+                    gfx.c1(16, 8),
+                    gfx.c1(8, 8),
+                    gfx.c1(0, 8),
+                );
                 break;
             case Command.G_TRI4:
                 this.gSPTri4(gfx);
                 break;
+            case Command.G_COL:
+                this.gSPColour(gfx);
+                break;
+            case Command.G_SETGEOMETRYMODE:
+                this.geometryMode |= gfx.w1;
+                break;
+            case Command.G_CLEARGEOMETRYMODE:
+                this.geometryMode &= ~gfx.w1;
+                break;
+
+            case Command.G_NOOP:
+            case Command.G_SPNOOP:
+            case Command.G_RDPFULLSYNC:
+            case Command.G_RDPTILESYNC:
+            case Command.G_RDPPIPESYNC:
+            case Command.G_RDPLOADSYNC:
+                // NOOP
+                break
+            default:
+                const cmd = gfx.command() << 24 >> 24;
+                console.warn("unknown command:", cmd, hexzero0x(gfx.command()).slice(8));
         }
     }
 
     private gSPVertex(gfx: GFX): void {
-        const srcIndex = segAddr(gfx.w1) / vertexStructSize;
+        const src = segAddr(gfx.w1);
+        const srcIndex = src.address / vertexStructSize;
         const n = gfx.c0(0, 16) / vertexStructSize;
         const dstIndex = gfx.c0(16, 4);
 
-        if (dstIndex+n > this.vtxSegments[Segment.BGVTX].length) {
+        if (dstIndex+n > this.vtxCache.length) {
             throw new Error("vtxCache overflow");
         }
 
         for (let i = 0; i < n; i++) {
-            this.vtxCache[Segment.BGVTX][dstIndex + i] = this.vtxSegments[Segment.BGVTX][srcIndex + i];
+            this.vtxCache[dstIndex + i] = this.vtxSegments[src.segment][srcIndex + i];
         }
+    }
+
+    // Got conflicting info between obviously wrong comments in the decomp and
+    // the port implementation. I'll do what the port does and hope for the best.
+    private gSPColour(gfx: GFX): void {
+        const src = segAddr(gfx.w1);
+        this.colCache = this.colSegments[src.segment].slice(src.address / 4);
     }
 
     private gSPTri(a:number, b:number, c:number): void {
         assert(a < 16 && b < 16 && c < 16, "vertex index out of vtxCache bounds");
 
-        const verts: Vertex[] = [
-            structuredClone(this.vtxCache[Segment.BGVTX][a]),
-            structuredClone(this.vtxCache[Segment.BGVTX][b]),
-            structuredClone(this.vtxCache[Segment.BGVTX][c]),
+        const verts: ComputedVertex[] = [
+            { ...this.vtxCache[a], cr: 0, cg: 0, cb: 0, ca: 0, },
+            { ...this.vtxCache[b], cr: 0, cg: 0, cb: 0, ca: 0, },
+            { ...this.vtxCache[c], cr: 0, cg: 0, cb: 0, ca: 0, },
         ];
 
         verts.forEach(v => {
@@ -251,6 +338,14 @@ export class DisplayListMeshBuilder extends MeshBuilder {
             // That's a guess.
             v.s = (v.s + 0x7FF) / 0xFFF;
             v.t = (v.t + 0x7FF) / 0xFFF;
+
+            const col: Colour = this.colCache[v.colour >> 2];
+            if (col !== undefined) {
+                v.cr = col.r / 255.0;
+                v.cg = col.g / 255.0;
+                v.cb = col.b / 255.0;
+                v.ca = col.a / 255.0;
+            }
         });
 
         this.pushFace(verts);

@@ -15,6 +15,14 @@ export interface Vertex {
     t:      number; // uint16
 };
 
+export interface Colour {
+    r: number; // uint8
+    g: number; // uint8
+    b: number; // uint8
+    a: number; // uint8
+};
+export const colourStructSize = 4;
+
 export function loadVertexFromView(view: DataView, offset: number): Vertex {
     return {
         x:      view.getInt16(offset),

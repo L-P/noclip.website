@@ -3,7 +3,8 @@ import { inflateRawSync } from "zlib";
 import { writeFileSync, readdirSync, mkdirSync } from "fs";
 
 import ROM from "../rom";
-import { BGSegment } from "../bg";
+import type { Inflater }  from "../rom";
+import { Room, BGSegment } from "../bg";
 
 const pathROM = `./data/PerfectDark64/pd.ntsc-final.z64`;
 const pathBaseOut = `./data/PerfectDark64`;
@@ -48,7 +49,26 @@ function main() {
         const seg = new BGSegment(rom.openFile(path), decompress);
         const outPath = `${pathBaseOut}/${path}.json`;
         writeFileSync(outPath, Buffer.from(JSON.stringify(seg)));
-        console.info("Wrote BG segment: ", outPath);
+
+        const nVertices: number = seg.rooms.reduce((acc:number, room:Room) => {
+            return acc + room.vertices.length;
+        }, 0);
+
+        const nColours: number = seg.rooms.reduce((acc:number, room:Room) => {
+            return acc + room.colours.length;
+        }, 0);
+
+        const nBlocks: number = seg.rooms.reduce((acc:number, room:Room) => {
+            return acc + room.blocks.length;
+        }, 0);
+
+        console.info(
+            `Wrote BG segment: ${outPath},`,
+            `${seg.rooms.length} rooms,`,
+            `${nBlocks} blocks,`,
+            `${nVertices} vertices,`,
+            `${nColours} colours,`,
+        );
     });
 }
 
@@ -61,11 +81,11 @@ const compressedMagicHeader = 0x1173;
 // There's no compressed data size, only zlib knows when to stop.
 // The decompression routine in pd64 also works on uncompressed data so every
 // file should be automatically and _optionally_ decompressed when read.
-// Despite this behaviour compressed files larger than their uncompressed data
+// Despite this behaviour, compressed files larger than their uncompressed data
 // can be found.
 // HACK: This is kept here and injected into the ROM/BGSegment DI-style to
 // avoid importing zlib into files imported by client-side code.
-function decompress(buf: ArrayBufferSlice): ArrayBufferSlice {
+const decompress: Inflater = function(buf: ArrayBufferSlice): ArrayBufferSlice {
     const view = buf.createDataView();
 
     // Uncompressed file, return as-is.

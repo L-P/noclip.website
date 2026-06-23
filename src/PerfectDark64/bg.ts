@@ -2,7 +2,16 @@ import ArrayBufferSlice from "../ArrayBufferSlice";
 import { assert, hexzero0x, readString } from "../util";
 import { vec3 } from "gl-matrix";
 
-import { gfxStructSize, loadVertexFromView, GFX, Command, Vertex, vertexStructSize } from "./f3dex";
+import {
+    Colour,
+    Command,
+    GFX,
+    Vertex,
+    colourStructSize,
+    gfxStructSize,
+    loadVertexFromView,
+    vertexStructSize,
+} from "./f3dex";
 import { Inflater } from "./rom";
 
 /**
@@ -88,7 +97,12 @@ interface Room {
     // Raw vertices, loaded as-is into the RSP the 0x0E segment.
     vertices: Vertex[];
 
+    colours: Colour[];
+
     blocks: Block[];
+    opaqueRoot: number | undefined; // index into blocks
+    translucentRoot: number | undefined; // index into blocks
+    blockOffsetMap: Map<number, number>; // ptr => index in blocks
 }
 
 // Matches the struct on ROM.
@@ -133,22 +147,25 @@ enum RoomBlockType {
 }
 
 interface Block {
+    // Offset in roomgfxdata where this block was loaded from.
+    offset: number; // uint32
+
     // {{{ Matches the struct on ROM.
-    Type: RoomBlockType; // uint8
+    type: RoomBlockType; // uint8
     // Three 0xFF bytes of padding.
-    NextPtr: number; // int32
+    nextPtr: number; // int32
 
     // union RoomBlockType.Leaf
-    GDLPtr: number; // int32
-    VerticesPtr: number; // int32
-    ColoursPtr: number; // int32
+    gdlPtr: number; // int32
+    verticesPtr: number; // int32
+    coloursPtr: number; // int32
 
     // union RoomBlockType.Parent
-    ChildPtr: number; // int32
-    Unk0C: number; // int32 // "pointer to 2 coords at least" per decomp comment.
+    childPtr: number; // int32
+    unk0c: number; // int32 // "pointer to 2 coords at least" per decomp comment.
     // }}
 
-    GDLs: GFX[];
+    gdls: GFX[];
 }
 const roomBlockStructSize = 20
 
@@ -167,27 +184,29 @@ function loadBlockGDLs(view: DataView): GFX[] {
     return ret;
 }
 
-function loadBlock(view: DataView, roomOffset: number): Block {
+function loadBlock(view: DataView, roomOffset: number, blockOffset: number): Block {
     let ret: Block = {
-        Type: view.getUint8(0),
-        NextPtr: view.getUint32(4),
+        offset: blockOffset,
 
-        GDLPtr: view.getUint32(8),
-        VerticesPtr: view.getUint32(12),
-        ColoursPtr: view.getUint32(16),
+        type: view.getUint8(0),
+        nextPtr: view.getUint32(4),
+
+        gdlPtr: view.getUint32(8),
+        verticesPtr: view.getUint32(12),
+        coloursPtr: view.getUint32(16),
 
         // Also read the block as if it was a Parent.
-        ChildPtr: view.getUint32(8),
-        Unk0C: view.getUint32(12),
+        childPtr: view.getUint32(8),
+        unk0c: view.getUint32(12),
 
-        GDLs: Array<GFX>(),
+        gdls: Array<GFX>(),
     };
 
     const offset = magicOffset + roomOffset;
-    ret.NextPtr     -= ret.NextPtr     === 0 ? 0 : offset;
-    ret.GDLPtr      -= ret.GDLPtr      === 0 ? 0 : offset;
-    ret.VerticesPtr -= ret.VerticesPtr === 0 ? 0 : offset;
-    ret.ColoursPtr  -= ret.ColoursPtr  === 0 ? 0 : offset;
+    ret.nextPtr     -= ret.nextPtr     === 0 ? 0 : offset;
+    ret.gdlPtr      -= ret.gdlPtr      === 0 ? 0 : offset;
+    ret.verticesPtr -= ret.verticesPtr === 0 ? 0 : offset;
+    ret.coloursPtr  -= ret.coloursPtr  === 0 ? 0 : offset;
 
     return ret;
 }
@@ -197,27 +216,117 @@ function loadRoomGFXDataBlocks(header: RoomGFXDataHeader, roomOffset: number, gf
     let offset = roomGFXDataHeaderStructSize;
     let end = header.verticesPtr;
 
-    const offsetToIndex: number[] = [];
-
     // The first entry is not skipped for a change.
     for (let offset = roomGFXDataHeaderStructSize; offset < end; offset += roomBlockStructSize) {
         const block = loadBlock(
             gfx.subarray(offset, roomBlockStructSize).createDataView(),
             roomOffset,
+            offset,
         );
 
-        if (block.Type === RoomBlockType.Leaf) {
-            block.GDLs = loadBlockGDLs(gfx.slice(block.GDLPtr).createDataView());
+        if (block.type === RoomBlockType.Leaf) {
+            block.gdls = loadBlockGDLs(gfx.slice(block.gdlPtr).createDataView());
         }
 
-        if (block.Type === RoomBlockType.Parent && block.VerticesPtr < end) {
-            end = block.VerticesPtr;
+        if (block.type === RoomBlockType.Parent && block.verticesPtr < end) {
+            end = block.verticesPtr;
         }
 
         ret.push(block);
     }
 
     return ret;
+}
+
+function loadRoomGFXDataColours(
+    header: RoomGFXDataHeader,
+    view: DataView,
+    room: Room,
+): Colour[] {
+    if (header.coloursPtr === 0) {
+        return [];
+    }
+
+    const nextGDL = findNextGDLInRoom(room, 0, findGDLType.Opaque | findGDLType.Translucent);
+    const count = (nextGDL - header.coloursPtr) / colourStructSize;
+
+    return Array.from({length: count}, (_, i) => {
+        const offset = header.coloursPtr + (i * colourStructSize);
+
+        return {
+            r: view.getUint8(offset),
+            g: view.getUint8(offset + 1),
+            b: view.getUint8(offset + 2),
+            a: view.getUint8(offset + 3),
+        }
+    });
+}
+
+enum findGDLType {
+    Opaque      = 1 << 0,
+    Translucent = 1 << 1,
+}
+
+function findNextGDLInRoom(room:Room, start: number, type: findGDLType) {
+    let opaGDL: number = 0;
+    let xluGDL: number = 0;
+
+    if (type & findGDLType.Opaque && room.opaqueRoot !== undefined) {
+        const block = room.blocks[room.opaqueRoot];
+        opaGDL = findNextGDLInBlock(room, block, start, 0);
+        if (type === findGDLType.Opaque) {
+            return opaGDL;
+        }
+    }
+
+    if (type & findGDLType.Translucent && room.translucentRoot !== undefined) {
+        const block = room.blocks[room.translucentRoot];
+        xluGDL = findNextGDLInBlock(room, block, start, 0);
+        if (type === findGDLType.Translucent) {
+            return xluGDL;
+        }
+    }
+
+    if (opaGDL > 0) {
+        if ((xluGDL > 0) && xluGDL < opaGDL) {
+            return xluGDL;
+        }
+
+        return opaGDL;
+    }
+
+    return xluGDL;
+}
+
+function findNextGDLInBlock(room:Room, block: Block | undefined, start: number, end: number): number {
+    const blockAtOffset = function(offset: number): Block | undefined {
+        const index = room.blockOffsetMap.get(offset);
+        if (index === undefined) {
+            return undefined;
+        }
+
+        return room.blocks[index];
+    };
+
+    while(block !== undefined) {
+        switch(block.type) {
+            case RoomBlockType.Leaf:
+                if ((block.gdlPtr > start) && (block.gdlPtr < end || end == 0)) {
+                    end = block.gdlPtr;
+                }
+                block = blockAtOffset(block.nextPtr);
+                break;
+            case RoomBlockType.Parent:
+                const tmp = findNextGDLInBlock(room, blockAtOffset(block.childPtr), start, end);
+                block = blockAtOffset(block.nextPtr);
+                end = tmp;
+                break;
+            default:
+                return end;
+        }
+    }
+
+    return end;
 }
 
 function loadRoomGFXDataVertices(header: RoomGFXDataHeader, view: DataView): Vertex[] {
@@ -253,18 +362,34 @@ function loadRooms(
         const gfxView = gfx.createDataView();
         const gfxDataHeader = readRoomGFXDataHeader(gfxView, bgRoom.roomOffset);
 
-        ret.push({
+        let room: Room = {
             number: i,
             vertices: loadRoomGFXDataVertices(gfxDataHeader, gfxView),
             blocks: loadRoomGFXDataBlocks(gfxDataHeader, bgRoom.roomOffset, gfx),
+            blockOffsetMap: new Map<number, number>(),
+            opaqueRoot: undefined,
+            translucentRoot: undefined,
+            colours: [],
             pos: {
                 x: bgRoom.pos[0],
                 y: bgRoom.pos[1],
                 z: bgRoom.pos[2],
+                flags: 0,
+                colour: 0,
                 s: 0,
                 t: 0,
             }
-        });
+        };
+
+        room.blockOffsetMap = new Map<number, number>(room.blocks.map((block, i) => {
+            return [block.offset, i];
+        }));
+        room.opaqueRoot = room.blockOffsetMap.get(gfxDataHeader.opaqueBlocksPtr);
+        room.translucentRoot = room.blockOffsetMap.get(gfxDataHeader.translucentBlocksPtr);
+
+        room.colours = loadRoomGFXDataColours(gfxDataHeader, gfxView, room);
+
+        ret.push(room);
     });
 
     return ret;

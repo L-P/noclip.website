@@ -1,49 +1,27 @@
 import ArrayBufferSlice from "../../ArrayBufferSlice";
+import { assert, hexzero0x, hexzero } from "../../util";
 import { inflateRawSync } from "zlib";
 import { writeFileSync, readdirSync, mkdirSync } from "fs";
+import { stages } from "../stages";
 
 import ROM from "../rom";
 import type { Inflater }  from "../rom";
 import { Room, BGSegment } from "../bg";
+import { formatBPP, Format, inflateTexture, InflatedTexture } from "../tex";
 
 const pathROM = `./data/PerfectDark64/pd.ntsc-final.z64`;
 const pathBaseOut = `./data/PerfectDark64`;
 
-const bgSegmentPaths: Array<string> = [
-    "bgdata/bg_ame.seg",
-    "bgdata/bg_arec.seg",
-    "bgdata/bg_azt.seg",
-    "bgdata/bg_cave.seg",
-    "bgdata/bg_crad.seg",
-    "bgdata/bg_cryp.seg",
-    "bgdata/bg_dam.seg",
-    "bgdata/bg_depo.seg",
-    "bgdata/bg_dish.seg",
-    "bgdata/bg_ear.seg",
-    "bgdata/bg_eld.seg",
-    "bgdata/bg_jun.seg",
-    "bgdata/bg_lee.seg",
-    "bgdata/bg_lue.seg",
-    "bgdata/bg_mp1.seg",
-    "bgdata/bg_mp10.seg",
-    "bgdata/bg_mp11.seg",
-    "bgdata/bg_mp12.seg",
-    "bgdata/bg_mp13.seg",
-    "bgdata/bg_mp15.seg",
-    "bgdata/bg_mp3.seg",
-    "bgdata/bg_mp4.seg",
-    "bgdata/bg_mp5.seg",
-    "bgdata/bg_mp9.seg",
-    "bgdata/bg_oat.seg",
-    "bgdata/bg_pam.seg",
-    "bgdata/bg_pete.seg",
-    "bgdata/bg_ref.seg",
-    "bgdata/bg_rit.seg",
-    "bgdata/bg_sho.seg",
-];
+function unique(input: Array<any>): Array<any> {
+    return input.filter((v, i, a) => {
+        return a.indexOf(v) === i;
+    });
+}
 
-function main() {
-    const rom = new ROM(pathROM, decompress);
+function writeBGSegments(rom: ROM) {
+    const bgSegmentPaths = unique(stages.map(stage => stage.bgPath));
+
+    mkdirSync(pathBaseOut + "/bgdata", {recursive: true});
 
     bgSegmentPaths.forEach((path) => {
         const seg = new BGSegment(rom.openFile(path), decompress);
@@ -70,6 +48,54 @@ function main() {
             `${nColours} colours,`,
         );
     });
+}
+
+function toMiB(v:number): string {
+    return (v / 1024 / 1024).toFixed(2);
+}
+
+function writeTextureData(rom: ROM) {
+    const outBase = pathBaseOut + "/textures/";
+    mkdirSync(outBase, {recursive: true});
+
+    let inflatedSize = 0;
+    let compressedSize = 0;
+
+    rom.textureData.forEach((data, i) => {
+        let texture: InflatedTexture = {};
+        const uncompressed = inflateTexture(texture, data, decompress);
+        if (uncompressed.byteLength <= 0) {
+            // DEBUG console.warn(`unable to inflate texture #${i}`);
+            return;
+        }
+
+        const expectedSize = Math.ceil((formatBPP(texture.format) * texture.width * texture.height) / 8);
+        if (expectedSize !== uncompressed.byteLength) {
+            console.warn(`texture #${i} expected ${expectedSize} bytes, got ${uncompressed.byteLength}`);
+        }
+
+        compressedSize += data.byteLength;
+        inflatedSize += uncompressed.byteLength;
+
+        const binPath = outBase + hexzero(i, 4) + ".bin";
+        const jsonPath = outBase + hexzero(i, 4) + ".json";
+
+        writeFileSync(binPath, Buffer.from(uncompressed.copyToBuffer()));
+        writeFileSync(jsonPath, Buffer.from(JSON.stringify(texture)));
+    });
+
+    console.info(
+        `Wrote texture data: ${outBase}*.bin,`,
+        rom.textureData.length, "textures,",
+        toMiB(compressedSize), "MiB compressed,",
+        toMiB(inflatedSize), "MiB uncompressed,",
+    );
+}
+
+function main() {
+    const rom = new ROM(pathROM, decompress);
+    writeBGSegments(rom);
+    writeTextureData(rom);
 }
 
 const compressedMagicHeader = 0x1173;

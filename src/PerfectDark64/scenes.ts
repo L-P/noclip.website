@@ -12,7 +12,7 @@ import { makeSortKey, GfxRendererLayer, GfxRenderInst, GfxRenderInstList } from 
 import { mat4 } from "gl-matrix";
 
 import ROM from "./rom";
-import { BGSegment} from "./bg";
+import { RoomBlockType, Block, BGSegment, Room} from "./bg";
 import { Program } from "./shaders";
 import { Vertex, GFX, Segment, Mesh, MeshBuilder, DisplayListMeshBuilder } from "./f3dex";
 
@@ -56,30 +56,44 @@ class Scene implements Viewer.SceneGfx {
         });
     }
 
-    public buildSceneRooms(device: GfxDevice, seg: BGSegment): SceneRoom[] {
+    private buildSceneRooms(device: GfxDevice, seg: BGSegment): SceneRoom[] {
         return seg.rooms.map(room => {
-            var builder = new DisplayListMeshBuilder();
-            builder.setSegmentVertices(Segment.BGVtx, room.vertices);
-            builder.setSegmentColours(Segment.BGCol, room.colours);
-
-            room.blocks.forEach(block => {
-                block.gdls.forEach(gdl => {
-                    builder.processGFX(new GFX(
-                        gdl.w0,
-                        gdl.w1,
-                    ));
-                });
-            });
-
-            builder.build(device, this.renderHelper.renderCache);
-
             return {
                 number: room.number,
                 pos: room.pos,
-                opaque: builder,
-                translucent: new Mesh(),
+                opaque: this.buildBlockTree(device, room, room.opaqueRoot),
+                translucent: this.buildBlockTree(device, room, room.translucentRoot),
             };
         });
+    }
+
+    private buildBlockTree(device: GfxDevice, room: Room, rootIndex: number | undefined): MeshBuilder {
+        if (rootIndex === undefined) {
+            return new MeshBuilder();
+        }
+
+        var builder = new DisplayListMeshBuilder();
+        builder.setSegmentVertices(Segment.BGVtx, room.vertices);
+        builder.setSegmentColours(Segment.BGCol, room.colours);
+        let block: Block | undefined = room.blocks[rootIndex];
+
+        while (block !== undefined) {
+            block.gdls.forEach(gdl => {
+                builder.processGFX(new GFX(
+                    gdl.w0,
+                    gdl.w1,
+                ));
+            });
+
+            if (block.type === RoomBlockType.Leaf) {
+                block = room.blockAtOffset(block.nextPtr);
+            } else if (block.type === RoomBlockType.Parent) {
+                block = room.blockAtOffset(block.childPtr);
+            }
+        }
+
+        builder.build(device, this.renderHelper.renderCache);
+        return builder;
     }
 
     public render(device: GfxDevice, viewerInput: Viewer.ViewerRenderInput): void {
@@ -117,11 +131,11 @@ class Scene implements Viewer.SceneGfx {
         this.renderInstList.reset();
     }
 
-    public renderSceneRooms(rooms: SceneRoom[], viewerInput: Viewer.ViewerRenderInput , template: GfxRenderInst): void {
+    private renderSceneRooms(rooms: SceneRoom[], viewerInput: Viewer.ViewerRenderInput , template: GfxRenderInst): void {
         rooms.forEach(room => this.renderSceneRoom(room, viewerInput, template));
     }
 
-    public renderSceneRoom(room: SceneRoom, viewerInput: Viewer.ViewerRenderInput , template: GfxRenderInst): void {
+    private renderSceneRoom(room: SceneRoom, viewerInput: Viewer.ViewerRenderInput , template: GfxRenderInst): void {
         if (this.renderOpaque && room.opaque.isValid()) {
             this.renderMesh(room.opaque, room.pos, viewerInput, template);
         }
@@ -130,7 +144,7 @@ class Scene implements Viewer.SceneGfx {
         }
     }
 
-    public renderMesh(mesh: Mesh, pos:Vertex, viewerInput: Viewer.ViewerRenderInput , template: GfxRenderInst): void {
+    private renderMesh(mesh: Mesh, pos:Vertex, viewerInput: Viewer.ViewerRenderInput , template: GfxRenderInst): void {
         const data = template.allocateUniformBufferF32(Program.ub_SceneParams, (4*4) + (3*4) );
         let offs = 0;
         offs += fillMatrix4x4(data, offs, viewerInput.camera.clipFromWorldMatrix);

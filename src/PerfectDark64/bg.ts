@@ -85,7 +85,7 @@ const bgRoomEntryStructSize = 20;
 // what's behind a closed door.
 // This interface is a mix of the decomp room and gfxdata structs, room is
 // mostly a "runtime" type whereas gfxdata is loaded from the ROM.
-interface Room {
+export class Room {
     // Since in pd64 the first empty entry is left intact rooms are effectively
     // 1-indexed. I don't like keeping invalid data around so for clarity and
     // debugging I leave the "roomnum" here as it would appear in in the game
@@ -103,6 +103,20 @@ interface Room {
     opaqueRoot: number | undefined; // index into blocks
     translucentRoot: number | undefined; // index into blocks
     blockOffsetMap: Map<number, number>; // ptr => index in blocks
+    serializedBlockOffsetMap: Array<Array<number>>;
+
+    public constructor(props?:Partial<Room>) {
+        Object.assign(this, props);
+    }
+
+    public blockAtOffset(offset: number): Block | undefined {
+        const index = this.blockOffsetMap.get(offset);
+        if (index === undefined) {
+            return undefined;
+        }
+
+        return this.blocks[index];
+    }
 }
 
 // Matches the struct on ROM.
@@ -141,12 +155,12 @@ function readRoomGFXDataHeader(view: DataView, roomOffset: number): RoomGFXDataH
     return header;
 }
 
-enum RoomBlockType {
+export enum RoomBlockType {
     Leaf   = 0,
     Parent = 1,
 }
 
-interface Block {
+export interface Block {
     // Offset in roomgfxdata where this block was loaded from.
     offset: number; // uint32
 
@@ -299,26 +313,17 @@ function findNextGDLInRoom(room:Room, start: number, type: findGDLType) {
 }
 
 function findNextGDLInBlock(room:Room, block: Block | undefined, start: number, end: number): number {
-    const blockAtOffset = function(offset: number): Block | undefined {
-        const index = room.blockOffsetMap.get(offset);
-        if (index === undefined) {
-            return undefined;
-        }
-
-        return room.blocks[index];
-    };
-
     while(block !== undefined) {
         switch(block.type) {
             case RoomBlockType.Leaf:
                 if ((block.gdlPtr > start) && (block.gdlPtr < end || end == 0)) {
                     end = block.gdlPtr;
                 }
-                block = blockAtOffset(block.nextPtr);
+                block = room.blockAtOffset(block.nextPtr);
                 break;
             case RoomBlockType.Parent:
-                const tmp = findNextGDLInBlock(room, blockAtOffset(block.childPtr), start, end);
-                block = blockAtOffset(block.nextPtr);
+                const tmp = findNextGDLInBlock(room, room.blockAtOffset(block.childPtr), start, end);
+                block = room.blockAtOffset(block.nextPtr);
                 end = tmp;
                 break;
             default:
@@ -362,11 +367,12 @@ function loadRooms(
         const gfxView = gfx.createDataView();
         const gfxDataHeader = readRoomGFXDataHeader(gfxView, bgRoom.roomOffset);
 
-        let room: Room = {
+        let room = new Room({
             number: i,
             vertices: loadRoomGFXDataVertices(gfxDataHeader, gfxView),
             blocks: loadRoomGFXDataBlocks(gfxDataHeader, bgRoom.roomOffset, gfx),
             blockOffsetMap: new Map<number, number>(),
+            serializedBlockOffsetMap: [],
             opaqueRoot: undefined,
             translucentRoot: undefined,
             colours: [],
@@ -379,14 +385,17 @@ function loadRooms(
                 s: 0,
                 t: 0,
             }
-        };
+        });
 
         room.blockOffsetMap = new Map<number, number>(room.blocks.map((block, i) => {
             return [block.offset, i];
         }));
+        // HACK: Because Map cannot be json-serialized, use an intermediary
+        // array to store the map.
+        room.serializedBlockOffsetMap = [...room.blockOffsetMap.entries()];
+
         room.opaqueRoot = room.blockOffsetMap.get(gfxDataHeader.opaqueBlocksPtr);
         room.translucentRoot = room.blockOffsetMap.get(gfxDataHeader.translucentBlocksPtr);
-
         room.colours = loadRoomGFXDataColours(gfxDataHeader, gfxView, room);
 
         ret.push(room);
@@ -444,6 +453,21 @@ export class BGSegment {
     }
 
     static fromJSON(buffer: ArrayBufferSlice): BGSegment {
-        return JSON.parse(new TextDecoder().decode(buffer.arrayBuffer));
+        let ret = JSON.parse(new TextDecoder().decode(buffer.arrayBuffer));
+
+        ret.rooms = ret.rooms.map((props:any) => {
+            let room = new Room(props);
+
+            room.blockOffsetMap = new Map<number, number>(
+                room.serializedBlockOffsetMap.map(entry => {
+                    return [entry[0], entry[1]];
+                })
+            );
+            room.serializedBlockOffsetMap = [];
+
+            return room;
+        });
+
+        return ret;
     }
 }

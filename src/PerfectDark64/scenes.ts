@@ -1,6 +1,6 @@
+import * as UI from "../ui";
 import * as Viewer from "../viewer";
 import { FakeTextureHolder, TextureHolder } from "../TextureHolder";
-import { mat4 } from "gl-matrix";
 import { GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxCullMode, GfxDevice, GfxFormat, GfxInputLayout, GfxMipFilterMode, GfxProgram, GfxSampler, GfxTexFilterMode, GfxTexture, GfxVertexBufferFrequency, GfxWrapMode, makeTextureDescriptor2D } from "../gfx/platform/GfxPlatform";
 import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
 import { GfxrAttachmentSlot } from "../gfx/render/GfxRenderGraph";
@@ -9,10 +9,11 @@ import { SceneContext } from "../SceneBase";
 import { fillMatrix4x3, fillMatrix4x4, fillVec4 } from "../gfx/helpers/UniformBufferHelpers";
 import { makeBackbufferDescSimple, makeAttachmentClearDescriptor, opaqueBlackFullClearRenderPassDescriptor } from '../gfx/helpers/RenderGraphHelpers.js';
 import { makeSortKey, GfxRendererLayer, GfxRenderInst, GfxRenderInstList } from "../gfx/render/GfxRenderInstManager";
+import { mat4 } from "gl-matrix";
 
-import { Program } from "./shaders";
 import ROM from "./rom";
 import { BGSegment} from "./bg";
+import { Program } from "./shaders";
 import { Vertex, GFX, Segment, Mesh, MeshBuilder, DisplayListMeshBuilder } from "./f3dex";
 
 const pathBase = `PerfectDark64`;
@@ -32,6 +33,9 @@ class Scene implements Viewer.SceneGfx {
     private program: GfxProgram;
     private linearSampler: GfxSampler;
     private rooms: SceneRoom[];
+
+    private renderOpaque: boolean = true;
+    private renderTranslucent: boolean = true;
 
     constructor(
         device: GfxDevice,
@@ -118,10 +122,10 @@ class Scene implements Viewer.SceneGfx {
     }
 
     public renderSceneRoom(room: SceneRoom, viewerInput: Viewer.ViewerRenderInput , template: GfxRenderInst): void {
-        if (room.opaque.isValid()) {
+        if (this.renderOpaque && room.opaque.isValid()) {
             this.renderMesh(room.opaque, room.pos, viewerInput, template);
         }
-        if (room.translucent.isValid()) {
+        if (this.renderTranslucent && room.translucent.isValid()) {
             this.renderMesh(room.translucent, room.pos, viewerInput, template);
         }
     }
@@ -165,6 +169,26 @@ class Scene implements Viewer.SceneGfx {
 
         this.renderHelper.destroy();
         this.textureHolder.destroy(device);
+    }
+
+    public createPanels(): UI.Panel[] {
+        const panel = new UI.Panel();
+        panel.customHeaderBackgroundColor = UI.COOL_BLUE_COLOR;
+        panel.setTitle(UI.RENDER_HACKS_ICON, 'Render Settings');
+
+        const renderOpaqueCheckbox = new UI.Checkbox('Render opaque blocks', this.renderOpaque);
+        renderOpaqueCheckbox.onchanged = () => {
+            this.renderOpaque = renderOpaqueCheckbox.checked;
+        };
+        panel.contents.appendChild(renderOpaqueCheckbox.elem);
+
+        const renderTranslucentCheckbox = new UI.Checkbox('Render translucent blocks', this.renderTranslucent);
+        renderTranslucentCheckbox.onchanged = () => {
+            this.renderTranslucent = renderTranslucentCheckbox.checked;
+        };
+        panel.contents.appendChild(renderTranslucentCheckbox.elem);
+
+        return [panel];
     }
 }
 

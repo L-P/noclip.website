@@ -23,7 +23,7 @@ export class Program extends DeviceProgram {
         in vec4 v_VertexColors;
 
         void main() {
-            gl_FragColor = vec4(v_VertexColors.rgb, 1.0);
+            gl_FragColor = vec4(v_VertexColors.rgba);
         }
     `;
 

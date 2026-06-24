@@ -1,7 +1,7 @@
 import * as UI from "../ui";
 import * as Viewer from "../viewer";
 import { FakeTextureHolder, TextureHolder } from "../TextureHolder";
-import { GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxCullMode, GfxDevice, GfxFormat, GfxInputLayout, GfxMipFilterMode, GfxProgram, GfxSampler, GfxTexFilterMode, GfxTexture, GfxVertexBufferFrequency, GfxWrapMode, makeTextureDescriptor2D } from "../gfx/platform/GfxPlatform";
+import { GfxBlendFactor, GfxBlendMode, GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxCullMode, GfxDevice, GfxFormat, GfxInputLayout, GfxMipFilterMode, GfxProgram, GfxSampler, GfxTexFilterMode, GfxTexture, GfxVertexBufferFrequency, GfxWrapMode, makeTextureDescriptor2D, GfxMegaStateDescriptor } from "../gfx/platform/GfxPlatform";
 import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
 import { GfxrAttachmentSlot } from "../gfx/render/GfxRenderGraph";
 import { IS_DEVELOPMENT } from "../BuildVersion";
@@ -10,6 +10,7 @@ import { fillMatrix4x3, fillMatrix4x4, fillVec4 } from "../gfx/helpers/UniformBu
 import { makeBackbufferDescSimple, makeAttachmentClearDescriptor, opaqueBlackFullClearRenderPassDescriptor } from '../gfx/helpers/RenderGraphHelpers.js';
 import { makeSortKey, GfxRendererLayer, GfxRenderInst, GfxRenderInstList } from "../gfx/render/GfxRenderInstManager";
 import { mat4 } from "gl-matrix";
+import { setAttachmentStateSimple } from '../gfx/helpers/GfxMegaStateDescriptorHelpers';
 
 import ROM from "./rom";
 import { RoomBlockType, Block, BGSegment, Room} from "./bg";
@@ -137,14 +138,21 @@ class Scene implements Viewer.SceneGfx {
 
     private renderSceneRoom(room: SceneRoom, viewerInput: Viewer.ViewerRenderInput , template: GfxRenderInst): void {
         if (this.renderOpaque && room.opaque.isValid()) {
+            template.sortKey = makeSortKey(GfxRendererLayer.OPAQUE);
             this.renderMesh(room.opaque, room.pos, viewerInput, template);
         }
         if (this.renderTranslucent && room.translucent.isValid()) {
+            template.sortKey = makeSortKey(GfxRendererLayer.TRANSLUCENT);
             this.renderMesh(room.translucent, room.pos, viewerInput, template);
         }
     }
 
-    private renderMesh(mesh: Mesh, pos:Vertex, viewerInput: Viewer.ViewerRenderInput , template: GfxRenderInst): void {
+    private renderMesh(
+        mesh: Mesh,
+        pos:Vertex,
+        viewerInput: Viewer.ViewerRenderInput,
+        template: GfxRenderInst,
+    ): void {
         const data = template.allocateUniformBufferF32(Program.ub_SceneParams, (4*4) + (3*4) );
         let offs = 0;
         offs += fillMatrix4x4(data, offs, viewerInput.camera.clipFromWorldMatrix);
@@ -167,7 +175,18 @@ class Scene implements Viewer.SceneGfx {
         );
 
         renderInst.setDrawCount(mesh.indexCount);
-        renderInst.setMegaStateFlags({ cullMode: GfxCullMode.Back });
+
+        let megaStateFlags: Partial<GfxMegaStateDescriptor> = {
+            cullMode: GfxCullMode.Back,
+        };
+
+        setAttachmentStateSimple(megaStateFlags, {
+            blendMode: GfxBlendMode.Add,
+            blendSrcFactor: GfxBlendFactor.SrcAlpha,
+            blendDstFactor: GfxBlendFactor.OneMinusSrcAlpha,
+        });
+        renderInst.setMegaStateFlags(megaStateFlags);
+
         this.renderInstList.submitRenderInst(renderInst);
     }
 

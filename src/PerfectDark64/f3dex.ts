@@ -124,22 +124,30 @@ export class GFX {
 }
 export const gfxStructSize = 8;
 
-export interface Mesh {
+export class Mesh {
     inputLayout: GfxInputLayout;
     vertexBuffer: GfxBuffer;
     indexBuffer: GfxBuffer;
-    indexCount: number;
+    indexCount: number = 0;
+
+    // Returns true if the mesh has been successfuly built an can be rendered.
+    public isValid(): boolean {
+        return this.indexCount > 0;
+    }
+
+    public destroy(device: GfxDevice): void {
+        if (!this.isValid()) {
+            return;
+        }
+
+        device.destroyBuffer(this.vertexBuffer);
+        device.destroyBuffer(this.indexBuffer);
+    }
 }
 
-export class MeshBuilder implements Mesh {
+export class MeshBuilder extends Mesh {
     public vertices: ComputedVertex[] = [];
     public indices: number[] = [];
-
-    // Available after build() has been called.
-    public inputLayout: GfxInputLayout;
-    public vertexBuffer: GfxBuffer;
-    public indexBuffer: GfxBuffer;
-    public indexCount: number;
 
     public pushFace(verts: ComputedVertex[]): void {
         const last = this.vertices.length;
@@ -147,12 +155,12 @@ export class MeshBuilder implements Mesh {
         this.indices.push(...verts.map((_, i) => last+i));
     }
 
-    public destroy(device: GfxDevice): void {
-        device.destroyBuffer(this.vertexBuffer);
-        device.destroyBuffer(this.indexBuffer);
-    }
-
     public build(device: GfxDevice, cache: GfxRenderCache): void {
+        if (this.indices.length == 0) {
+            console.warn("attempted to build an empty mesh");
+            return;
+        }
+
         const vertexArray = new Float32Array(this.vertices.length * computedVertexElementsCount);
         this.vertices.forEach((v, i) => {
             vertexArray.set(
@@ -226,10 +234,6 @@ export class DisplayListMeshBuilder extends MeshBuilder {
     private vtxCache: Vertex[] = Array<Vertex>(16);
     private colCache: Colour[] = [];
     private geometryMode: GeometryMode = 0; // bitflags
-
-    public offset: Vertex = {
-        x: 0, y: 0, z: 0, flags: 0, colour: 0, s: 0, t: 0,
-    }; // DEBUG
 
     constructor() {
         super();
@@ -331,10 +335,6 @@ export class DisplayListMeshBuilder extends MeshBuilder {
         ];
 
         verts.forEach(v => {
-            v.x += this.offset.x;
-            v.y += this.offset.y;
-            v.z += this.offset.z;
-
             // That's a guess.
             v.s = (v.s + 0x7FF) / 0xFFF;
             v.t = (v.t + 0x7FF) / 0xFFF;

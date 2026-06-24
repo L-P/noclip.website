@@ -13,17 +13,25 @@ import { makeSortKey, GfxRendererLayer, GfxRenderInst, GfxRenderInstList } from 
 import { Program } from "./shaders";
 import ROM from "./rom";
 import { BGSegment} from "./bg";
-import { GFX, Segment, Mesh, MeshBuilder, DisplayListMeshBuilder } from "./f3dex";
+import { Vertex, GFX, Segment, Mesh, MeshBuilder, DisplayListMeshBuilder } from "./f3dex";
 
 const pathBase = `PerfectDark64`;
+
+interface SceneRoom {
+    number: number;
+    pos: Vertex; // only used for xyz
+
+    opaque: Mesh;
+    translucent: Mesh;
+}
 
 class Scene implements Viewer.SceneGfx {
     public renderHelper: GfxRenderHelper;
 
     private renderInstList = new GfxRenderInstList();
-    private mesh: MeshBuilder;
     private program: GfxProgram;
     private linearSampler: GfxSampler;
+    private rooms: SceneRoom[];
 
     constructor(
         device: GfxDevice,
@@ -33,7 +41,7 @@ class Scene implements Viewer.SceneGfx {
         this.renderHelper = new GfxRenderHelper(device);
         const cache = this.renderHelper.renderCache;
 
-        this.mesh = this.buildMesh(device, seg);
+        this.rooms = this.buildSceneRooms(device, seg);
         this.program = cache.createProgram(new Program());
         this.linearSampler = cache.createSampler({
             minFilter: GfxTexFilterMode.Bilinear,
@@ -44,15 +52,11 @@ class Scene implements Viewer.SceneGfx {
         });
     }
 
-    public buildMesh(device: GfxDevice, seg: BGSegment): MeshBuilder {
-        var builder = new DisplayListMeshBuilder();
-
-        seg.rooms.forEach(room => {
+    public buildSceneRooms(device: GfxDevice, seg: BGSegment): SceneRoom[] {
+        return seg.rooms.map(room => {
+            var builder = new DisplayListMeshBuilder();
             builder.setSegmentVertices(Segment.BGVtx, room.vertices);
             builder.setSegmentColours(Segment.BGCol, room.colours);
-            builder.offset.x = room.pos.x;
-            builder.offset.y = room.pos.y;
-            builder.offset.z = room.pos.z;
 
             room.blocks.forEach(block => {
                 block.gdls.forEach(gdl => {
@@ -63,11 +67,15 @@ class Scene implements Viewer.SceneGfx {
                 });
             });
 
+            builder.build(device, this.renderHelper.renderCache);
+
+            return {
+                number: room.number,
+                pos: room.pos,
+                opaque: builder,
+                translucent: new Mesh(),
+            };
         });
-
-        builder.build(device, this.renderHelper.renderCache);
-
-        return builder;
     }
 
     public render(device: GfxDevice, viewerInput: Viewer.ViewerRenderInput): void {
@@ -84,7 +92,7 @@ class Scene implements Viewer.SceneGfx {
             numUniformBuffers: 1,
         }]);
 
-        this.renderMesh(this.mesh, viewerInput, template);
+        this.renderSceneRooms(this.rooms, viewerInput, template);
 
         const mainColorTargetID = builder.createRenderTargetID(mainColorDesc, 'Main Color');
         const mainDepthTargetID = builder.createRenderTargetID(mainDepthDesc, 'Main Depth');
@@ -105,12 +113,26 @@ class Scene implements Viewer.SceneGfx {
         this.renderInstList.reset();
     }
 
-    public renderMesh(mesh: Mesh, viewerInput: Viewer.ViewerRenderInput , template: GfxRenderInst): void {
+    public renderSceneRooms(rooms: SceneRoom[], viewerInput: Viewer.ViewerRenderInput , template: GfxRenderInst): void {
+        rooms.forEach(room => this.renderSceneRoom(room, viewerInput, template));
+    }
+
+    public renderSceneRoom(room: SceneRoom, viewerInput: Viewer.ViewerRenderInput , template: GfxRenderInst): void {
+        if (room.opaque.isValid()) {
+            this.renderMesh(room.opaque, room.pos, viewerInput, template);
+        }
+        if (room.translucent.isValid()) {
+            this.renderMesh(room.translucent, room.pos, viewerInput, template);
+        }
+    }
+
+    public renderMesh(mesh: Mesh, pos:Vertex, viewerInput: Viewer.ViewerRenderInput , template: GfxRenderInst): void {
         const data = template.allocateUniformBufferF32(Program.ub_SceneParams, (4*4) + (3*4) );
         let offs = 0;
         offs += fillMatrix4x4(data, offs, viewerInput.camera.clipFromWorldMatrix);
 
         let mat = mat4.create();
+        mat4.translate(mat, mat, [pos.x, pos.y, pos.z]);
         offs += fillMatrix4x3(data, offs, mat);
 
         const renderInst = this.renderHelper.renderInstManager.newRenderInst();
@@ -132,7 +154,15 @@ class Scene implements Viewer.SceneGfx {
     }
 
     public destroy(device: GfxDevice): void {
-        this.mesh.destroy(device);
+        this.rooms.forEach(room => {
+            if (room.opaque !== undefined) {
+                room.opaque.destroy(device);
+            }
+            if (room.translucent !== undefined) {
+                room.translucent.destroy(device);
+            }
+        });
+
         this.renderHelper.destroy();
         this.textureHolder.destroy(device);
     }

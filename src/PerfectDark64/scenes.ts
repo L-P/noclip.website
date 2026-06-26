@@ -6,8 +6,9 @@ import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
 import { GfxrAttachmentSlot } from "../gfx/render/GfxRenderGraph";
 import { IS_DEVELOPMENT } from "../BuildVersion";
 import { SceneContext } from "../SceneBase";
+import { computeViewMatrix, computeViewMatrixSkybox } from '../Camera.js';
 import { fillMatrix4x3, fillMatrix4x4, fillVec4 } from "../gfx/helpers/UniformBufferHelpers";
-import { makeBackbufferDescSimple, makeAttachmentClearDescriptor, opaqueBlackFullClearRenderPassDescriptor } from '../gfx/helpers/RenderGraphHelpers.js';
+import { makeBackbufferDescSimple, makeAttachmentClearDescriptor, opaqueBlackFullClearRenderPassDescriptor, standardFullClearRenderPassDescriptor } from '../gfx/helpers/RenderGraphHelpers.js';
 import { makeSortKey, GfxRendererLayer, GfxRenderInst, GfxRenderInstList } from "../gfx/render/GfxRenderInstManager";
 import { mat4 } from "gl-matrix";
 import { setAttachmentStateSimple } from '../gfx/helpers/GfxMegaStateDescriptorHelpers';
@@ -16,6 +17,7 @@ import ROM from "./rom";
 import { RoomBlockType, Block, BGSegment, Room} from "./bg";
 import { Program } from "./shaders";
 import { Vertex, GFX, Segment, Mesh, MeshBuilder, DisplayListMeshBuilder } from "./f3dex";
+import { Stage, StageID, stages } from './stages';
 
 const pathBase = `PerfectDark64`;
 
@@ -30,22 +32,27 @@ interface SceneRoom {
 class Scene implements Viewer.SceneGfx {
     public renderHelper: GfxRenderHelper;
 
-    private renderInstList = new GfxRenderInstList();
+    private renderInstListSky = new GfxRenderInstList();
+    private renderInstListMain = new GfxRenderInstList();
     private program: GfxProgram;
     private linearSampler: GfxSampler;
     private rooms: SceneRoom[];
+    private skyColor = standardFullClearRenderPassDescriptor;
 
-    private renderOpaque: boolean = true;
-    private renderTranslucent: boolean = true;
+    private shouldRenderSkybox: boolean = true;
+    private shouldRenderOpaque: boolean = true;
+    private shouldRenderTranslucent: boolean = true;
 
     constructor(
         device: GfxDevice,
         public textureHolder: TextureHolder,
+        private stage: Stage,
         seg: BGSegment,
     ) {
         this.renderHelper = new GfxRenderHelper(device);
         const cache = this.renderHelper.renderCache;
 
+        this.skyColor = makeAttachmentClearDescriptor(stage.skyColor);
         this.rooms = this.buildSceneRooms(device, seg);
         this.program = cache.createProgram(new Program());
         this.linearSampler = cache.createSampler({
@@ -101,7 +108,7 @@ class Scene implements Viewer.SceneGfx {
         this.renderHelper.debugDraw.beginFrame(viewerInput.camera.projectionMatrix, viewerInput.camera.viewMatrix, viewerInput.backbufferWidth, viewerInput.backbufferHeight);
 
         const renderInstManager = this.renderHelper.renderInstManager;
-        const mainColorDesc = makeBackbufferDescSimple(GfxrAttachmentSlot.Color0, viewerInput, opaqueBlackFullClearRenderPassDescriptor);
+        const mainColorDesc = makeBackbufferDescSimple(GfxrAttachmentSlot.Color0, viewerInput, this.skyColor);
         const mainDepthDesc = makeBackbufferDescSimple(GfxrAttachmentSlot.DepthStencil, viewerInput, opaqueBlackFullClearRenderPassDescriptor);
         const builder = this.renderHelper.renderGraph.newGraphBuilder();
 
@@ -111,40 +118,93 @@ class Scene implements Viewer.SceneGfx {
             numUniformBuffers: 1,
         }]);
 
+        this.renderSkybox(viewerInput, template);
         this.renderSceneRooms(this.rooms, viewerInput, template);
 
         const mainColorTargetID = builder.createRenderTargetID(mainColorDesc, 'Main Color');
         const mainDepthTargetID = builder.createRenderTargetID(mainDepthDesc, 'Main Depth');
+
+        builder.pushPass(pass => {
+            pass.setDebugName("Skybox");
+            pass.attachRenderTargetID(GfxrAttachmentSlot.Color0, mainColorTargetID);
+            const skyboxDepthTargetID = builder.createRenderTargetID(mainDepthDesc, 'Skybox Depth');
+            pass.attachRenderTargetID(GfxrAttachmentSlot.DepthStencil, skyboxDepthTargetID);
+            pass.exec(passRenderer => {
+                this.renderInstListSky.drawOnPassRenderer(this.renderHelper.renderCache, passRenderer);
+            });
+        });
+
         builder.pushPass(pass => {
             pass.setDebugName("Main");
             pass.attachRenderTargetID(GfxrAttachmentSlot.Color0, mainColorTargetID);
             pass.attachRenderTargetID(GfxrAttachmentSlot.DepthStencil, mainDepthTargetID);
             pass.exec(passRenderer => {
-                this.renderInstList.drawOnPassRenderer(this.renderHelper.renderCache, passRenderer);
+                this.renderInstListMain.drawOnPassRenderer(this.renderHelper.renderCache, passRenderer);
             });
         });
+
         this.renderHelper.renderInstManager.popTemplate();
 
         this.renderHelper.antialiasingSupport.pushPasses(builder, viewerInput, mainColorTargetID);
         builder.resolveRenderTargetToExternalTexture(mainColorTargetID, viewerInput.onscreenTexture);
         this.renderHelper.prepareToRender();
         builder.execute();
-        this.renderInstList.reset();
+        this.renderInstListMain.reset();
+        this.renderInstListSky.reset();
+    }
+
+    private renderSkybox(viewerInput: Viewer.ViewerRenderInput, template: GfxRenderInst): void {
+        if (!this.shouldRenderSkybox) {
+            return
+        }
+
+        if (this.stage.skyRoom === 0x00) {
+            return;
+        }
+
+        const skyRoom = this.rooms.find(v => v.number === this.stage.skyRoom);
+        if (skyRoom === undefined) {
+            return;
+        }
+
+        skyRoom.opaque.isSkybox = true;
+        skyRoom.translucent.isSkybox = true;
+
+        this.renderSceneRoom(skyRoom, viewerInput, template).forEach(inst => {
+            if (inst.getDrawCount() > 0) {
+                this.renderInstListSky.submitRenderInst(inst);
+            }
+        });
     }
 
     private renderSceneRooms(rooms: SceneRoom[], viewerInput: Viewer.ViewerRenderInput , template: GfxRenderInst): void {
-        rooms.forEach(room => this.renderSceneRoom(room, viewerInput, template));
+        rooms.forEach(room => {
+            if (room.number === this.stage.skyRoom) {
+                return;
+            }
+
+            this.renderSceneRoom(room, viewerInput, template).forEach(inst => {
+                // FIXME: Some rooms are empty. Maybe cull those before rendering.
+                if (inst.getDrawCount() > 0) {
+                    this.renderInstListMain.submitRenderInst(inst);
+                }
+            });
+        });
     }
 
-    private renderSceneRoom(room: SceneRoom, viewerInput: Viewer.ViewerRenderInput , template: GfxRenderInst): void {
-        if (this.renderOpaque && room.opaque.isValid()) {
+    private renderSceneRoom(room: SceneRoom, viewerInput: Viewer.ViewerRenderInput , template: GfxRenderInst): GfxRenderInst[] {
+        var ret: GfxRenderInst[] = [];
+
+        if (this.shouldRenderOpaque && room.opaque.isValid()) {
             template.sortKey = makeSortKey(GfxRendererLayer.OPAQUE);
-            this.renderMesh(room.opaque, room.pos, viewerInput, template);
+            ret.push(this.renderMesh(room.opaque, room.pos, viewerInput, template));
         }
-        if (this.renderTranslucent && room.translucent.isValid()) {
+        if (this.shouldRenderTranslucent && room.translucent.isValid()) {
             template.sortKey = makeSortKey(GfxRendererLayer.TRANSLUCENT);
-            this.renderMesh(room.translucent, room.pos, viewerInput, template);
+            ret.push(this.renderMesh(room.translucent, room.pos, viewerInput, template));
         }
+
+        return ret;
     }
 
     private renderMesh(
@@ -152,10 +212,18 @@ class Scene implements Viewer.SceneGfx {
         pos:Vertex,
         viewerInput: Viewer.ViewerRenderInput,
         template: GfxRenderInst,
-    ): void {
+    ): GfxRenderInst {
         const data = template.allocateUniformBufferF32(Program.ub_SceneParams, (4*4) + (3*4) );
         let offs = 0;
-        offs += fillMatrix4x4(data, offs, viewerInput.camera.clipFromWorldMatrix);
+
+        if (mesh.isSkybox) {
+            let skyProj = mat4.create();
+            computeViewMatrixSkybox(skyProj, viewerInput.camera);
+            mat4.mul(skyProj, viewerInput.camera.projectionMatrix, skyProj);
+            offs += fillMatrix4x4(data, offs, skyProj);
+        } else {
+            offs += fillMatrix4x4(data, offs, viewerInput.camera.clipFromWorldMatrix);
+        }
 
         let mat = mat4.create();
         mat4.translate(mat, mat, [pos.x, pos.y, pos.z]);
@@ -187,7 +255,7 @@ class Scene implements Viewer.SceneGfx {
         });
         renderInst.setMegaStateFlags(megaStateFlags);
 
-        this.renderInstList.submitRenderInst(renderInst);
+        return renderInst;
     }
 
     public destroy(device: GfxDevice): void {
@@ -209,15 +277,21 @@ class Scene implements Viewer.SceneGfx {
         panel.customHeaderBackgroundColor = UI.COOL_BLUE_COLOR;
         panel.setTitle(UI.RENDER_HACKS_ICON, 'Render Settings');
 
-        const renderOpaqueCheckbox = new UI.Checkbox('Render opaque blocks', this.renderOpaque);
+        const renderSkyboxCheckbox = new UI.Checkbox('Render skybox ', this.shouldRenderSkybox);
+        renderSkyboxCheckbox.onchanged = () => {
+            this.shouldRenderSkybox = renderSkyboxCheckbox.checked;
+        };
+        panel.contents.appendChild(renderSkyboxCheckbox.elem);
+
+        const renderOpaqueCheckbox = new UI.Checkbox('Render opaque blocks', this.shouldRenderOpaque);
         renderOpaqueCheckbox.onchanged = () => {
-            this.renderOpaque = renderOpaqueCheckbox.checked;
+            this.shouldRenderOpaque = renderOpaqueCheckbox.checked;
         };
         panel.contents.appendChild(renderOpaqueCheckbox.elem);
 
-        const renderTranslucentCheckbox = new UI.Checkbox('Render translucent blocks', this.renderTranslucent);
+        const renderTranslucentCheckbox = new UI.Checkbox('Render translucent blocks', this.shouldRenderTranslucent);
         renderTranslucentCheckbox.onchanged = () => {
-            this.renderTranslucent = renderTranslucentCheckbox.checked;
+            this.shouldRenderTranslucent = renderTranslucentCheckbox.checked;
         };
         panel.contents.appendChild(renderTranslucentCheckbox.elem);
 
@@ -228,18 +302,23 @@ class Scene implements Viewer.SceneGfx {
 class SceneDesc implements Viewer.SceneDesc {
     constructor(
         public id: string,
+        public stageID: StageID,
         public name: string,
-        public bgSegmentPath: string,
     ) {
     }
 
     public async createScene(device: GfxDevice, sceneContext: SceneContext): Promise<Viewer.SceneGfx> {
-        const bgJSON = await sceneContext.dataFetcher.fetchData(`${pathBase}/${this.bgSegmentPath}.json`);
+        const stage: Stage|undefined = stages.find(v => v.id === this.stageID);
+        if (stage === undefined) {
+            throw new Error(`StageID ${this.stageID} not found`);
+        }
+
+        const bgJSON = await sceneContext.dataFetcher.fetchData(`${pathBase}/${stage.bgPath}.json`);
 
         const viewerTextures: Viewer.Texture[] = [];
         const fakeTextureHolder = new FakeTextureHolder(viewerTextures);
 
-        return new Scene(device, fakeTextureHolder, BGSegment.fromJSON(bgJSON));
+        return new Scene(device, fakeTextureHolder, stage, BGSegment.fromJSON(bgJSON));
     }
 }
 
@@ -253,56 +332,56 @@ export const sceneGroup: Viewer.SceneGroup = {
     // planes, not worth including.
     sceneDescs: [
         "Mission 1",
-        new SceneDesc("mission_01_01", "dataDyne Central - Defection", "bgdata/bg_ame.seg"),
-        new SceneDesc("mission_01_02", "dataDyne Research - Investigation", "bgdata/bg_ear.seg"),
-        new SceneDesc("mission_01_03", "dataDyne Central - Extraction", "bgdata/bg_ame.seg"),
+        new SceneDesc("mission_01_01", StageID.Defection, "dataDyne Central - Defection"),
+        new SceneDesc("mission_01_02", StageID.Investigation, "dataDyne Research - Investigation"),
+        new SceneDesc("mission_01_03", StageID.Extraction, "dataDyne Central - Extraction"),
         "Mission 2",
-        new SceneDesc("mission_02_01", "Carrington Villa - Hostage One", "bgdata/bg_eld.seg"),
+        new SceneDesc("mission_02_01", StageID.Villa, "Carrington Villa - Hostage One"),
         "Mission 3",
-        new SceneDesc("mission_03_01", "Chicago - Stealth", "bgdata/bg_pete.seg"),
-        new SceneDesc("mission_03_02", "G5 Building - Reconnaissance", "bgdata/bg_depo.seg"),
+        new SceneDesc("mission_03_01", StageID.Chicago, "Chicago - Stealth"),
+        new SceneDesc("mission_03_02", StageID.G5Building, "G5 Building - Reconnaissance"),
         "Mission 4",
-        new SceneDesc("mission_04_01", "Area 51 - Infiltration", "bgdata/bg_lue.seg"),
-        new SceneDesc("mission_04_02", "Area 51 - Rescue", "bgdata/bg_lue.seg"),
-        new SceneDesc("mission_04_03", "Area 51 - Escape", "bgdata/bg_lue.seg"),
+        new SceneDesc("mission_04_01", StageID.Infiltration, "Area 51 - Infiltration"),
+        new SceneDesc("mission_04_02", StageID.Rescue, "Area 51 - Rescue"),
+        new SceneDesc("mission_04_03", StageID.Escape, "Area 51 - Escape"),
         "Mission 5",
-        new SceneDesc("mission_05_01", "Air Base - Espionage", "bgdata/bg_cave.seg"),
-        new SceneDesc("mission_05_02", "Air Force One - Antiterrorism", "bgdata/bg_rit.seg"),
-        new SceneDesc("mission_05_03", "Crash Site - Confrontation", "bgdata/bg_azt.seg"),
+        new SceneDesc("mission_05_01", StageID.AirBase, "Air Base - Espionage"),
+        new SceneDesc("mission_05_02", StageID.AirForceOne, "Air Force One - Antiterrorism"),
+        new SceneDesc("mission_05_03", StageID.CrashSite, "Crash Site - Confrontation"),
         "Mission 6",
-        new SceneDesc("mission_06_01", "Pelagic II - Exploration", "bgdata/bg_dam.seg"),
-        new SceneDesc("mission_06_02", "Deep Sea - Nullify Threat", "bgdata/bg_pam.seg"),
+        new SceneDesc("mission_06_01", StageID.Pelagic, "Pelagic II - Exploration"),
+        new SceneDesc("mission_06_02", StageID.DeepSea, "Deep Sea - Nullify Threat"),
         "Mission 7",
-        new SceneDesc("mission_07_01", "Carrington Institute - Defense", "bgdata/bg_dish.seg"),
+        new SceneDesc("mission_07_01", StageID.Defense, "Carrington Institute - Defense"),
         "Mission 8",
-        new SceneDesc("mission_08_01", "Attack Ship - Covert Assault", "bgdata/bg_lee.seg"),
+        new SceneDesc("mission_08_01", StageID.AttackShip, "Attack Ship - Covert Assault"),
         "Mission 9",
-        new SceneDesc("mission_09_01", "Skedar Ruins - Battle Shrine", "bgdata/bg_sho.seg"),
+        new SceneDesc("mission_09_01", StageID.SkedarRuins, "Skedar Ruins - Battle Shrine"),
         "Special Assignments",
-        new SceneDesc("mission_10_01", "Mr. Blonde's Revenge", "bgdata/bg_ame.seg"),
-        new SceneDesc("mission_10_02", "Maian SOS", "bgdata/bg_lue.seg"),
-        new SceneDesc("mission_10_03", "WAR!", "bgdata/bg_sho.seg"),
-        new SceneDesc("mission_10_04", "The Duel", "bgdata/bg_dish.seg"),
+        new SceneDesc("mission_10_01", StageID.MisterBlondesRevenge, "Mr. Blonde's Revenge"),
+        new SceneDesc("mission_10_02", StageID.MaianSOS, "Maian SOS"),
+        new SceneDesc("mission_10_03", StageID.War, "WAR!"),
+        new SceneDesc("mission_10_04", StageID.Duel, "The Duel"),
 
         "Multiplayer - Dark",
-         new SceneDesc("mp_mp3", "Area 52", "bgdata/bg_mp3.seg"),
-         new SceneDesc("mp_mp1", "Base", "bgdata/bg_mp1.seg"),
-         new SceneDesc("mp_mp5", "Car Park", "bgdata/bg_mp5.seg"),
-         new SceneDesc("mp_mp12", "Fortress", "bgdata/bg_mp12.seg"),
-         new SceneDesc("mp_cryp", "G5 Building", "bgdata/bg_cryp.seg"),
-         new SceneDesc("mp_mp15", "Grid", "bgdata/bg_mp15.seg"),
-         new SceneDesc("mp_crad", "Pipes", "bgdata/bg_crad.seg"),
-         new SceneDesc("mp_arec", "Ravine", "bgdata/bg_arec.seg"),
-         new SceneDesc("mp_mp9", "Ruins", "bgdata/bg_mp9.seg"),
-         new SceneDesc("mp_mp10", "Sewers", "bgdata/bg_mp10.seg"),
-         new SceneDesc("mp_oat", "Skedar", "bgdata/bg_oat.seg"),
-         new SceneDesc("mp_mp13", "Villa", "bgdata/bg_mp13.seg"),
-         new SceneDesc("mp_mp4", "Warehouse", "bgdata/bg_mp4.seg"),
+         new SceneDesc("mp_mp3",  StageID.MPArea52, "Area 52"),
+         new SceneDesc("mp_mp1",  StageID.MPBase, "Base"),
+         new SceneDesc("mp_mp5",  StageID.MPCarPark, "Car Park"),
+         new SceneDesc("mp_mp12", StageID.MPFortress, "Fortress"),
+         new SceneDesc("mp_cryp", StageID.MPG5Building, "G5 Building"),
+         new SceneDesc("mp_mp15", StageID.MPGrid, "Grid"),
+         new SceneDesc("mp_crad", StageID.MPPipes, "Pipes"),
+         new SceneDesc("mp_arec", StageID.MPRavine, "Ravine"),
+         new SceneDesc("mp_mp9",  StageID.MPRuins, "Ruins"),
+         new SceneDesc("mp_mp10", StageID.MPSewers, "Sewers"),
+         new SceneDesc("mp_oat",  StageID.MPSkedar, "Skedar"),
+         new SceneDesc("mp_mp13", StageID.MPVilla, "Villa"),
+         new SceneDesc("mp_mp4",  StageID.MPWarehouse, "Warehouse"),
 
         "Multiplayer - Classic",
-         new SceneDesc("mp_ref", "Complex", "bgdata/bg_ref.seg"),
-         new SceneDesc("mp_mp11", "Felicity", "bgdata/bg_mp11.seg"),
-         new SceneDesc("mp_jun", "Temple", "bgdata/bg_jun.seg"),
+        new SceneDesc("mp_ref",  StageID.MPComplex,  "Complex"),
+        new SceneDesc("mp_mp11", StageID.MPFelicity, "Felicity"),
+        new SceneDesc("mp_jun",  StageID.MPTemple,   "Temple"),
     ],
 
     // WIP

@@ -125,10 +125,11 @@ export class GFX {
 export const gfxStructSize = 8;
 
 export class Mesh {
-    inputLayout: GfxInputLayout;
-    vertexBuffer: GfxBuffer;
-    indexBuffer: GfxBuffer;
-    indexCount: number = 0;
+    public inputLayout: GfxInputLayout;
+    public vertexBuffer: GfxBuffer;
+    public indexBuffer: GfxBuffer;
+    public indexCount: number = 0;
+    public isSkybox: boolean = false;
 
     // Returns true if the mesh has been successfuly built an can be rendered.
     public isValid(): boolean {

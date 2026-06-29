@@ -1,13 +1,23 @@
+import * as UI from '../ui.js';
+import * as Viewer from "../viewer";
 import ArrayBufferSlice from "../ArrayBufferSlice";
-import type { Inflater }  from "./rom";
-import { assert, hexzero0x, hexzero } from "../util";
+import { assert, hexzero0x, spliceBisectRight } from "../util";
 import { parseTLUT, ImageFormat, ImageSize, TextFilt, TexCM, getSizBitsPerPixel, decodeTex_RGBA16, decodeTex_RGBA32, decodeTex_CI4, decodeTex_CI8, decodeTex_IA4, decodeTex_IA8, decodeTex_IA16, decodeTex_I4, decodeTex_I8, TextureLUT, getTLUTSize } from "../Common/N64/Image.js";
+import { GfxDevice } from "../gfx/platform/GfxPlatform";
+
+import type { Inflater }  from "./rom";
 
 export interface InflatedTexture {
-    format: ImageFormat;
+    index: number;
+    format: Format;
+    imageFormat: ImageFormat;
+    imageSize: ImageSize;
     palette: number[]; // May be empty depending on format.
     width: number;
     height: number;
+
+    offset: number; // offset in the coalesced texture binary we output
+    size: number; // raw pixel data length
 }
 
 export enum Format {
@@ -58,7 +68,7 @@ export function formatBPP(format: Format): number {
 }
 
 function toGBIFormat(format: Format): ImageFormat {
-    const mapping: ImageFormat[] = [
+    return [
         ImageFormat.G_IM_FMT_RGBA,
         ImageFormat.G_IM_FMT_RGBA,
         ImageFormat.G_IM_FMT_RGBA,
@@ -72,9 +82,11 @@ function toGBIFormat(format: Format): ImageFormat {
         ImageFormat.G_IM_FMT_CI,
         ImageFormat.G_IM_FMT_CI,
         ImageFormat.G_IM_FMT_CI,
-    ];
+    ][format];
+}
 
-    return mapping[format];
+function toGBISize(format: Format): ImageSize {
+    return ImageSize.G_IM_SIZ_32b;
 }
 
 export interface TextureListEntry {
@@ -150,9 +162,11 @@ function inflateZlibTexture(
     let offset = 1; // Skip header.
 
     texture.format = view.getUint8(offset++);
-    const nColors = view.getUint8(offset++) + 1;
+    texture.imageFormat = toGBIFormat(texture.format);
+    texture.imageSize = toGBISize(texture.format);
 
     texture.palette = [];
+    const nColors = view.getUint8(offset++) + 1;
     for (let i = 0; i < nColors; i++) {
         texture.palette.push(view.getUint16(offset+=2));
     }
@@ -161,4 +175,64 @@ function inflateZlibTexture(
     texture.height = view.getUint8(offset++);
 
     return decompress(data.subarray(offset));
+}
+
+export function preprocess(texture: InflatedTexture, data: ArrayBufferSlice): ArrayBufferSlice {
+    return realign(texture, data);
+}
+
+// Textures are aligned to 8 bytes per row
+function realign(texture: InflatedTexture, data: ArrayBufferSlice): ArrayBufferSlice {
+    const bpp = formatBPP(texture.format);
+    const indicePerByte = 8 / bpp;
+    const dst = new Uint8Array(Math.ceil(texture.width * texture.height * (bpp / 8)));
+    const view = data.createDataView();
+    let inOffset = 0;
+    let outOffset = 0;
+    for (let y = 0; y < texture.height; y++) {
+        var written = 0;
+        for (let x = 0; x < texture.width; x += indicePerByte) {
+            dst[outOffset] = view.getUint8(inOffset);
+            outOffset++;
+            inOffset++;
+        }
+
+        outOffset = (outOffset + 7) & ~7;
+    }
+
+    return data;
+}
+
+export class TextureListHolder implements UI.TextureListHolder {
+    private viewerTextures: Viewer.Texture[] = [];
+    public onnewtextures: (() => void) = (() => {});
+
+    constructor(textures: Viewer.Texture[]) {
+        this.addTextures(textures);
+    }
+
+    public get textureNames(): string[] {
+        return this.viewerTextures.map((texture) => texture.gfxTexture.ResourceName!);
+    }
+
+    public async getViewerTexture(i: number) {
+        return this.viewerTextures[i];
+    }
+
+    public addTextures(textures: Viewer.Texture[]): void {
+        let changed = false;
+        for (let i = 0; i < textures.length; i++) {
+            if (this.viewerTextures.find((texture) => textures[i].gfxTexture.ResourceName === texture.gfxTexture.ResourceName) === undefined) {
+                spliceBisectRight(this.viewerTextures, textures[i], (a:Viewer.Texture, b:Viewer.Texture) => a.gfxTexture.ResourceName!.localeCompare(b.gfxTexture.ResourceName!));
+                changed = true;
+            }
+        }
+
+        if (changed)
+            this.onnewtextures();
+    }
+
+    public destroy(device: GfxDevice): void {
+        this.viewerTextures.forEach(v => device.destroyTexture(v.gfxTexture));
+    }
 }

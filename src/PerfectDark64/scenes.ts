@@ -1,6 +1,7 @@
+import * as RDP from "../Common/N64/RDP";
 import * as UI from "../ui";
 import * as Viewer from "../viewer";
-import { FakeTextureHolder, TextureHolder } from "../TextureHolder";
+import ArrayBufferSlice from "../ArrayBufferSlice";
 import { GfxBlendFactor, GfxBlendMode, GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxCullMode, GfxDevice, GfxFormat, GfxInputLayout, GfxMipFilterMode, GfxProgram, GfxSampler, GfxTexFilterMode, GfxTexture, GfxVertexBufferFrequency, GfxWrapMode, makeTextureDescriptor2D, GfxMegaStateDescriptor } from "../gfx/platform/GfxPlatform";
 import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
 import { GfxrAttachmentSlot } from "../gfx/render/GfxRenderGraph";
@@ -8,18 +9,21 @@ import { IS_DEVELOPMENT } from "../BuildVersion";
 import { SceneContext } from "../SceneBase";
 import { computeViewMatrix, computeViewMatrixSkybox } from '../Camera.js';
 import { fillMatrix4x3, fillMatrix4x4, fillVec4 } from "../gfx/helpers/UniformBufferHelpers";
+import { hexzero0x } from "../util";
 import { makeBackbufferDescSimple, makeAttachmentClearDescriptor, opaqueBlackFullClearRenderPassDescriptor, standardFullClearRenderPassDescriptor } from '../gfx/helpers/RenderGraphHelpers.js';
 import { makeSortKey, GfxRendererLayer, GfxRenderInst, GfxRenderInstList } from "../gfx/render/GfxRenderInstManager";
 import { mat4 } from "gl-matrix";
 import { setAttachmentStateSimple } from '../gfx/helpers/GfxMegaStateDescriptorHelpers';
+import { r5g5b5a1, decodeTex_CI4, decodeTex_CI8, decodeTex_IA8, decodeTex_RGBA16, decodeTex_RGBA32, decodeTex_I8, decodeTex_I4, decodeTex_IA16, parseTLUT, TextureLUT, decodeTex_IA4, } from "../Common/N64/Image";
 
-import ROM from "./rom";
 import { RoomBlockType, Block, BGSegment, Room} from "./bg";
 import { Program } from "./shaders";
 import { Vertex, GFX, Segment, Mesh, MeshBuilder, DisplayListMeshBuilder } from "./f3dex";
-import { Stage, StageID, stages } from './stages';
+import { Stage, StageID, stages } from "./stages";
+import * as tex from "./tex";
+import { NumTextures } from "./rom";
 
-const pathBase = `PerfectDark64`;
+const pathBase = `PerfectDark64/`;
 
 interface SceneRoom {
     number: number;
@@ -45,7 +49,7 @@ class Scene implements Viewer.SceneGfx {
 
     constructor(
         device: GfxDevice,
-        public textureHolder: TextureHolder,
+        public textureHolder: tex.TextureListHolder,
         private stage: Stage,
         seg: BGSegment,
     ) {
@@ -313,13 +317,50 @@ class SceneDesc implements Viewer.SceneDesc {
             throw new Error(`StageID ${hexzero0x(this.stageID, 2)} not found`);
         }
 
-        const bgJSON = await sceneContext.dataFetcher.fetchData(`${pathBase}/${stage.bgPath}.json`);
+        const bgJSON = sceneContext.dataFetcher.fetchData([pathBase, stage.bgPath, ".json"].join(""));
+        const viewerTextures = await loadViewerTextures(sceneContext, device);
+        const textureHolder = new tex.TextureListHolder(viewerTextures);
 
-        const viewerTextures: Viewer.Texture[] = [];
-        const fakeTextureHolder = new FakeTextureHolder(viewerTextures);
-
-        return new Scene(device, fakeTextureHolder, stage, BGSegment.fromJSON(bgJSON));
+        return new Scene(device, textureHolder, stage, BGSegment.fromJSON(await bgJSON));
     }
+}
+
+async function loadViewerTextures(sceneContext: SceneContext, device: GfxDevice): Promise<Viewer.Texture[]> {
+    const binPromise = sceneContext.dataFetcher.fetchData(pathBase + "textures.bin");
+    const metaJSON = await sceneContext.dataFetcher.fetchData(pathBase + "textures.json");
+    const meta = JSON.parse(new TextDecoder().decode(metaJSON.arrayBuffer)) as tex.InflatedTexture[];
+    const bin = await binPromise;
+
+    return meta.map(texture => {
+        let lut = new Uint8Array(4 * texture.palette.length);
+        texture.palette.forEach((v, i) => {
+            r5g5b5a1(lut, i * 4, v);
+        });
+
+        const dst = new Uint8Array(texture.width * texture.height * 4);
+
+        const indices = bin.subarray(texture.offset, texture.size);
+        const view = tex.preprocess(texture, indices).createDataView();
+
+        switch (texture.format) {
+        case tex.Format.RGBA16_CI8:
+            decodeTex_CI8(dst, view, 0, texture.width, texture.height, lut);
+            break;
+        case tex.Format.RGBA16_CI4:
+            decodeTex_CI4(dst, view, 0, texture.width, texture.height, lut);
+            break;
+        }
+
+        const gfxTexture = device.createTexture(makeTextureDescriptor2D(
+            GfxFormat.U8_RGBA_NORM,
+            texture.width, texture.height,
+            1,
+        ));
+        device.setResourceName(gfxTexture, hexzero0x(texture.index, 4));
+        device.uploadTextureData(gfxTexture, 0, [dst]);
+
+        return {gfxTexture};
+    });
 }
 
 export const sceneGroup: Viewer.SceneGroup = {

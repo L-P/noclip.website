@@ -1,6 +1,6 @@
 import ArrayBufferSlice from "../ArrayBufferSlice";
 import { readFileSync } from "fs";
-import { readString } from "../util";
+import { assert, readString } from "../util";
 
 import * as tex from "./tex";
 
@@ -30,6 +30,8 @@ const textureDataSize = 0x291d60;
 const textureListOffset = textureDataOffset + textureDataSize;
 const textureListEndOffset = 0x1ffea20;
 const textureListSize = textureListEndOffset - textureListOffset;
+
+export const NumTextures = (textureListSize / tex.textureListEntryStructSize) - 1;
 
 // Abusing enums to avoid repeating a var name prefix. Sue me.
 enum TextureConfigOffset {
@@ -144,6 +146,7 @@ export default class ROM {
         this.textureList = this.readTextureList();
         this.textureConfig = this.readTextureConfig();
         this.textureData = this.readTextureData();
+        assert(this.textureData.length === NumTextures, `expected ${NumTextures} textures, got ${this.textureData.length}`);
     }
 
     // Returns the raw uncompressed (if applicable) data for a file.

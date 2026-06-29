@@ -64,7 +64,7 @@ function expand5to8(n: number): number {
     return ((n << (8 - 5)) | (n >>> (10 - 8))) & 0xFF;
 }
 
-function r5g5b5a1(dst: Uint8Array, dstOffs: number, p: number) {
+export function r5g5b5a1(dst: Uint8Array, dstOffs: number, p: number) {
     dst[dstOffs + 0] = expand5to8((p & 0xF800) >> 11);
     dst[dstOffs + 1] = expand5to8((p & 0x07C0) >> 6);
     dst[dstOffs + 2] = expand5to8((p & 0x003E) >> 1);

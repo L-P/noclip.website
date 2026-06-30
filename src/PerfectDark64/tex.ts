@@ -16,6 +16,7 @@ export interface InflatedTexture {
     width: number;
     height: number;
 
+    addr: number; // original in-ROM texture data addr
     offset: number; // offset in the coalesced texture binary we output
     size: number; // raw pixel data length
 }
@@ -86,7 +87,39 @@ function toGBIFormat(format: Format): ImageFormat {
 }
 
 function toGBISize(format: Format): ImageSize {
-    return ImageSize.G_IM_SIZ_32b;
+    return [
+        ImageSize.G_IM_SIZ_32b,
+        ImageSize.G_IM_SIZ_16b,
+        ImageSize.G_IM_SIZ_32b,
+        ImageSize.G_IM_SIZ_16b,
+        ImageSize.G_IM_SIZ_16b,
+        ImageSize.G_IM_SIZ_8b,
+        ImageSize.G_IM_SIZ_4b,
+        ImageSize.G_IM_SIZ_8b,
+        ImageSize.G_IM_SIZ_4b,
+        ImageSize.G_IM_SIZ_8b,
+        ImageSize.G_IM_SIZ_4b,
+        ImageSize.G_IM_SIZ_8b,
+        ImageSize.G_IM_SIZ_4b,
+    ][format];
+}
+
+function toGBILUTMode(format: Format): TextureLUT {
+    return [
+        TextureLUT.G_TT_NONE,
+        TextureLUT.G_TT_NONE,
+        TextureLUT.G_TT_NONE,
+        TextureLUT.G_TT_NONE,
+        TextureLUT.G_TT_NONE,
+        TextureLUT.G_TT_NONE,
+        TextureLUT.G_TT_NONE,
+        TextureLUT.G_TT_NONE,
+        TextureLUT.G_TT_NONE,
+        TextureLUT.G_TT_RGBA16,
+        TextureLUT.G_TT_RGBA16,
+        TextureLUT.G_TT_IA16,
+        TextureLUT.G_TT_IA16,
+    ][format];
 }
 
 export interface TextureListEntry {
@@ -168,7 +201,11 @@ function inflateZlibTexture(
     texture.palette = [];
     const nColors = view.getUint8(offset++) + 1;
     for (let i = 0; i < nColors; i++) {
-        texture.palette.push(view.getUint16(offset+=2));
+        texture.palette.push(view.getUint16(offset));
+
+        // Do NOT postfix increment the offset in the above call, it somehow
+        // manges the last entry of the palette.
+        offset += 2;
     }
 
     texture.width = view.getUint8(offset++);
@@ -181,7 +218,7 @@ export function preprocess(texture: InflatedTexture, data: ArrayBufferSlice): Ar
     return realign(texture, data);
 }
 
-// Textures are aligned to 8 bytes per row
+// Textures must be aligned to 8 bytes per row but are stored without the padding.
 function realign(texture: InflatedTexture, data: ArrayBufferSlice): ArrayBufferSlice {
     const bpp = formatBPP(texture.format);
     const indicePerByte = 8 / bpp;
@@ -205,10 +242,22 @@ function realign(texture: InflatedTexture, data: ArrayBufferSlice): ArrayBufferS
 
 export class TextureListHolder implements UI.TextureListHolder {
     private viewerTextures: Viewer.Texture[] = [];
+    private numberToIndex: Map<string, number> = new Map();
+    private metadata: Map<number, InflatedTexture> = new Map();
+
     public onnewtextures: (() => void) = (() => {});
 
-    constructor(textures: Viewer.Texture[]) {
+    constructor(textures: Viewer.Texture[], meta: InflatedTexture[]) {
         this.addTextures(textures);
+        this.addMetadata(meta);
+
+        this.viewerTextures.forEach((texture, i) => {
+            this.numberToIndex.set(texture.gfxTexture.ResourceName!, i);
+        });
+    }
+
+    public addMetadata(meta: InflatedTexture[]): void {
+        meta.forEach(v => this.metadata.set(v.index, v));
     }
 
     public get textureNames(): string[] {
@@ -217,6 +266,16 @@ export class TextureListHolder implements UI.TextureListHolder {
 
     public async getViewerTexture(i: number) {
         return this.viewerTextures[i];
+    }
+
+    public getMetadata(i: number): InflatedTexture | undefined {
+        return this.metadata.get(i);
+    }
+
+    public getByTextureNumber(i: number): Viewer.Texture {
+        // FIXME: Use number instead of string.
+        const name = hexzero0x(i, 4);
+        return this.viewerTextures[this.numberToIndex.get(name)!];
     }
 
     public addTextures(textures: Viewer.Texture[]): void {

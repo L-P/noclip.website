@@ -14,6 +14,8 @@ export class Program extends DeviceProgram {
             Mat4x4 u_ClipFromWorld;
             Mat3x4 u_WorldFromLocal;
         };
+
+        uniform sampler2D u_Texture;
     `;
 
     public override frag = `
@@ -23,7 +25,21 @@ export class Program extends DeviceProgram {
         in vec4 v_VertexColors;
 
         void main() {
-            gl_FragColor = vec4(v_VertexColors.rgba);
+            vec4 col = vec4(1.0, 1.0, 1.0, 1.0);
+            #ifdef ENABLE_TEXTURES
+                col = texture(SAMPLER_2D(u_Texture), v_TexCoord.xy);
+            #endif
+
+            #ifdef ENABLE_VERTEX_COLORS
+                col *= v_VertexColors.rgba;
+            #endif
+
+            // FIXME: Better handling of missing textures.
+            if (col == vec4(0.0, 0.0, 0.0, 0.0)) {
+                col = v_VertexColors;
+            }
+
+            gl_FragColor = col;
         }
     `;
 

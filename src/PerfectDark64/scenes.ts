@@ -4,6 +4,7 @@ import * as Viewer from "../viewer";
 import ArrayBufferSlice from "../ArrayBufferSlice";
 import { GfxBlendFactor, GfxBlendMode, GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxCullMode, GfxDevice, GfxFormat, GfxInputLayout, GfxMipFilterMode, GfxProgram, GfxSampler, GfxTexFilterMode, GfxTexture, GfxVertexBufferFrequency, GfxWrapMode, makeTextureDescriptor2D, GfxMegaStateDescriptor } from "../gfx/platform/GfxPlatform";
 import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
+import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { GfxrAttachmentSlot } from "../gfx/render/GfxRenderGraph";
 import { IS_DEVELOPMENT } from "../BuildVersion";
 import { SceneContext } from "../SceneBase";
@@ -14,7 +15,7 @@ import { makeBackbufferDescSimple, makeAttachmentClearDescriptor, opaqueBlackFul
 import { makeSortKey, GfxRendererLayer, GfxRenderInst, GfxRenderInstList } from "../gfx/render/GfxRenderInstManager";
 import { mat4 } from "gl-matrix";
 import { setAttachmentStateSimple } from '../gfx/helpers/GfxMegaStateDescriptorHelpers';
-import { r5g5b5a1, decodeTex_CI4, decodeTex_CI8, decodeTex_IA8, decodeTex_RGBA16, decodeTex_RGBA32, decodeTex_I8, decodeTex_I4, decodeTex_IA16, parseTLUT, TextureLUT, decodeTex_IA4, } from "../Common/N64/Image";
+import { ImageFormat, ImageSize, r5g5b5a1, decodeTex_CI4, decodeTex_CI8, decodeTex_IA8, decodeTex_RGBA16, decodeTex_RGBA32, decodeTex_I8, decodeTex_I4, decodeTex_IA16, parseTLUT, TextureLUT, decodeTex_IA4, } from "../Common/N64/Image";
 
 import { RoomBlockType, Block, BGSegment, Room} from "./bg";
 import { Program } from "./shaders";
@@ -38,11 +39,13 @@ class Scene implements Viewer.SceneGfx {
 
     private renderInstListSky = new GfxRenderInstList();
     private renderInstListMain = new GfxRenderInstList();
-    private program: GfxProgram;
+    private gfxProgram: GfxProgram | null = null;
     private linearSampler: GfxSampler;
     private rooms: SceneRoom[];
     private skyColor = standardFullClearRenderPassDescriptor;
 
+    private shouldEnableTextures: boolean = true;
+    private shouldEnableVertexColors: boolean = true;
     private shouldRenderSkybox: boolean = true;
     private shouldRenderOpaque: boolean = true;
     private shouldRenderTranslucent: boolean = true;
@@ -58,14 +61,27 @@ class Scene implements Viewer.SceneGfx {
 
         this.skyColor = makeAttachmentClearDescriptor(stage.skyColor);
         this.rooms = this.buildSceneRooms(device, seg);
-        this.program = cache.createProgram(new Program());
         this.linearSampler = cache.createSampler({
             minFilter: GfxTexFilterMode.Bilinear,
             magFilter: GfxTexFilterMode.Bilinear,
             mipFilter: GfxMipFilterMode.Nearest,
-            wrapS: GfxWrapMode.Clamp,
-            wrapT: GfxWrapMode.Clamp,
+            wrapS: GfxWrapMode.Repeat,
+            wrapT: GfxWrapMode.Repeat,
         });
+    }
+
+    private createProgram(): Program {
+        var ret = new Program();
+
+        if (this.shouldEnableVertexColors) {
+            ret.defines.set('ENABLE_VERTEX_COLORS', '1');
+        }
+
+        if (this.shouldEnableTextures) {
+            ret.defines.set('ENABLE_TEXTURES', '1');
+        }
+
+        return ret;
     }
 
     private buildSceneRooms(device: GfxDevice, seg: BGSegment): SceneRoom[] {
@@ -84,7 +100,7 @@ class Scene implements Viewer.SceneGfx {
             return [];
         }
 
-        var interpreter = new Interpreter();
+        var interpreter = new Interpreter(this.textureHolder);
         interpreter.setSegmentVertices(Segment.BGVtx, room.vertices);
         interpreter.setSegmentColours(Segment.BGCol, room.colours);
         let block: Block | undefined = room.blocks[rootIndex];
@@ -236,10 +252,14 @@ class Scene implements Viewer.SceneGfx {
         mat4.translate(mat, mat, [pos.x, pos.y, pos.z]);
         offs += fillMatrix4x3(data, offs, mat);
 
+        if (this.gfxProgram === null) {
+            this.gfxProgram = this.renderHelper.renderCache.createProgram(this.createProgram());
+        }
+
         const renderInst = this.renderHelper.renderInstManager.newRenderInst();
-        renderInst.setGfxProgram(this.program);
+        renderInst.setGfxProgram(this.gfxProgram);
         renderInst.setSamplerBindings(0, [{
-            gfxTexture: null,
+            gfxTexture: mesh.texture,
             gfxSampler: this.linearSampler,
         }]);
 
@@ -284,6 +304,20 @@ class Scene implements Viewer.SceneGfx {
         panel.customHeaderBackgroundColor = UI.COOL_BLUE_COLOR;
         panel.setTitle(UI.RENDER_HACKS_ICON, 'Render Settings');
 
+        const enableTexturesCheckbox = new UI.Checkbox('Enable textures', this.shouldEnableTextures);
+        enableTexturesCheckbox.onchanged = () => {
+            this.shouldEnableTextures = enableTexturesCheckbox.checked;
+            this.gfxProgram = null;
+        };
+        panel.contents.appendChild(enableTexturesCheckbox.elem);
+
+        const enableVertexColorsCheckbox = new UI.Checkbox('Enable vertex colors', this.shouldEnableVertexColors);
+        enableVertexColorsCheckbox.onchanged = () => {
+            this.shouldEnableVertexColors = enableVertexColorsCheckbox.checked;
+            this.gfxProgram = null;
+        };
+        panel.contents.appendChild(enableVertexColorsCheckbox.elem);
+
         const renderSkyboxCheckbox = new UI.Checkbox('Render skybox ', this.shouldRenderSkybox);
         renderSkyboxCheckbox.onchanged = () => {
             this.shouldRenderSkybox = renderSkyboxCheckbox.checked;
@@ -321,27 +355,25 @@ class SceneDesc implements Viewer.SceneDesc {
         }
 
         const bgJSON = sceneContext.dataFetcher.fetchData([pathBase, stage.bgPath, ".json"].join(""));
-        const viewerTextures = await loadViewerTextures(sceneContext, device);
-        const textureHolder = new tex.TextureListHolder(viewerTextures);
+        const textureHolder = await loadViewerTextures(sceneContext, device);
 
         return new Scene(device, textureHolder, stage, BGSegment.fromJSON(await bgJSON));
     }
 }
 
-async function loadViewerTextures(sceneContext: SceneContext, device: GfxDevice): Promise<Viewer.Texture[]> {
+async function loadViewerTextures(sceneContext: SceneContext, device: GfxDevice): Promise<tex.TextureListHolder> {
     const binPromise = sceneContext.dataFetcher.fetchData(pathBase + "textures.bin");
     const metaJSON = await sceneContext.dataFetcher.fetchData(pathBase + "textures.json");
     const meta = JSON.parse(new TextDecoder().decode(metaJSON.arrayBuffer)) as tex.InflatedTexture[];
     const bin = await binPromise;
 
-    return meta.map(texture => {
+    const viewerTextures = meta.map(texture => {
         let lut = new Uint8Array(4 * texture.palette.length);
         texture.palette.forEach((v, i) => {
             r5g5b5a1(lut, i * 4, v);
         });
 
         const dst = new Uint8Array(texture.width * texture.height * 4);
-
         const indices = bin.subarray(texture.offset, texture.size);
         const view = tex.preprocess(texture, indices).createDataView();
 
@@ -362,8 +394,18 @@ async function loadViewerTextures(sceneContext: SceneContext, device: GfxDevice)
         device.setResourceName(gfxTexture, hexzero0x(texture.index, 4));
         device.uploadTextureData(gfxTexture, 0, [dst]);
 
-        return {gfxTexture};
+        const extraInfo: Map<string, string> = new Map();
+
+        extraInfo.set("Number", "" + texture.index);
+        extraInfo.set("Format", tex.Format[texture.format]);
+        extraInfo.set("Image format", ImageFormat[texture.imageFormat]);
+        extraInfo.set("Image size", ImageSize[texture.imageSize]);
+        extraInfo.set("Palette size", "" + texture.palette.length);
+
+        return { gfxTexture, extraInfo };
     });
+
+    return new tex.TextureListHolder(viewerTextures, meta);
 }
 
 export const sceneGroup: Viewer.SceneGroup = {

@@ -73,6 +73,7 @@ function writeTextureData(rom: ROM) {
 
         texture.size = decompressed.byteLength;
         texture.offset = inflatedSize;
+        texture.addr = rom.textureList[i].dataOffset;
         meta.push(texture);
 
         const view = decompressed.createDataView();

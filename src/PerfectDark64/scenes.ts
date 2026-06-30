@@ -18,7 +18,7 @@ import { r5g5b5a1, decodeTex_CI4, decodeTex_CI8, decodeTex_IA8, decodeTex_RGBA16
 
 import { RoomBlockType, Block, BGSegment, Room} from "./bg";
 import { Program } from "./shaders";
-import { Vertex, GFX, Segment, Mesh, MeshBuilder, DisplayListMeshBuilder } from "./f3dex";
+import { Vertex, GFX, Segment, Mesh, Interpreter } from "./f3dex";
 import { Stage, StageID, stages } from "./stages";
 import * as tex from "./tex";
 import { NumTextures } from "./rom";
@@ -29,8 +29,8 @@ interface SceneRoom {
     number: number;
     pos: Vertex; // only used for xyz
 
-    opaque: Mesh;
-    translucent: Mesh;
+    opaque: Mesh[];
+    translucent: Mesh[];
 }
 
 class Scene implements Viewer.SceneGfx {
@@ -79,19 +79,19 @@ class Scene implements Viewer.SceneGfx {
         });
     }
 
-    private buildBlockTree(device: GfxDevice, room: Room, rootIndex: number | undefined): MeshBuilder {
+    private buildBlockTree(device: GfxDevice, room: Room, rootIndex: number | undefined): Mesh[] {
         if (rootIndex === undefined) {
-            return new MeshBuilder();
+            return [];
         }
 
-        var builder = new DisplayListMeshBuilder();
-        builder.setSegmentVertices(Segment.BGVtx, room.vertices);
-        builder.setSegmentColours(Segment.BGCol, room.colours);
+        var interpreter = new Interpreter();
+        interpreter.setSegmentVertices(Segment.BGVtx, room.vertices);
+        interpreter.setSegmentColours(Segment.BGCol, room.colours);
         let block: Block | undefined = room.blocks[rootIndex];
 
         while (block !== undefined) {
             block.gdls.forEach(gdl => {
-                builder.processGFX(new GFX(
+                interpreter.processGFX(new GFX(
                     gdl.w0,
                     gdl.w1,
                 ));
@@ -104,8 +104,7 @@ class Scene implements Viewer.SceneGfx {
             }
         }
 
-        builder.build(device, this.renderHelper.renderCache);
-        return builder;
+        return interpreter.build(device, this.renderHelper.renderCache);
     }
 
     public render(device: GfxDevice, viewerInput: Viewer.ViewerRenderInput): void {
@@ -171,8 +170,8 @@ class Scene implements Viewer.SceneGfx {
             return;
         }
 
-        skyRoom.opaque.isSkybox = true;
-        skyRoom.translucent.isSkybox = true;
+        skyRoom.opaque.forEach(v => v.isSkybox = true);
+        skyRoom.translucent.forEach(v => v.isSkybox = true);
 
         this.renderSceneRoom(skyRoom, viewerInput, template).forEach(inst => {
             if (inst.getDrawCount() > 0) {
@@ -199,13 +198,17 @@ class Scene implements Viewer.SceneGfx {
     private renderSceneRoom(room: SceneRoom, viewerInput: Viewer.ViewerRenderInput , template: GfxRenderInst): GfxRenderInst[] {
         var ret: GfxRenderInst[] = [];
 
-        if (this.shouldRenderOpaque && room.opaque.isValid()) {
+        if (this.shouldRenderOpaque) {
             template.sortKey = makeSortKey(GfxRendererLayer.OPAQUE);
-            ret.push(this.renderMesh(room.opaque, room.pos, viewerInput, template));
+            room.opaque.forEach(mesh => {
+                ret.push(this.renderMesh(mesh, room.pos, viewerInput, template));
+            });
         }
-        if (this.shouldRenderTranslucent && room.translucent.isValid()) {
+        if (this.shouldRenderTranslucent) {
             template.sortKey = makeSortKey(GfxRendererLayer.TRANSLUCENT);
-            ret.push(this.renderMesh(room.translucent, room.pos, viewerInput, template));
+            room.translucent.forEach(mesh => {
+                ret.push(this.renderMesh(mesh, room.pos, viewerInput, template));
+            });
         }
 
         return ret;
@@ -265,10 +268,10 @@ class Scene implements Viewer.SceneGfx {
     public destroy(device: GfxDevice): void {
         this.rooms.forEach(room => {
             if (room.opaque !== undefined) {
-                room.opaque.destroy(device);
+                room.opaque.forEach(v => v.destroy(device));
             }
             if (room.translucent !== undefined) {
-                room.translucent.destroy(device);
+                room.translucent.forEach(v => v.destroy(device));
             }
         });
 

@@ -5,6 +5,7 @@ import { createBufferFromData } from "../gfx/helpers/BufferHelpers";
 
 import { Program } from "./shaders";
 
+// Vertex as used by the RSP.
 export interface Vertex {
     x:      number; // uint16
     y:      number; // uint16
@@ -17,6 +18,7 @@ export interface Vertex {
 export const vertexStructSize = 12;
 const vertexElementsCount = 7;
 
+// Vertex as used by our shader.
 interface ComputedVertex extends Vertex {
     cr: number; // uint8, color/normal
     cg: number; // uint8, color/normal
@@ -146,7 +148,7 @@ export class Mesh {
     }
 }
 
-export class MeshBuilder extends Mesh {
+export class MeshBuilder {
     public vertices: ComputedVertex[] = [];
     public indices: number[] = [];
 
@@ -156,10 +158,12 @@ export class MeshBuilder extends Mesh {
         this.indices.push(...verts.map((_, i) => last+i));
     }
 
-    public build(device: GfxDevice, cache: GfxRenderCache): void {
+    public buildMesh(device: GfxDevice, cache: GfxRenderCache): Mesh {
+        const mesh = new Mesh();
+
         if (this.indices.length == 0) {
             console.warn("attempted to build an empty mesh");
-            return;
+            return mesh;
         }
 
         const vertexArray = new Float32Array(this.vertices.length * computedVertexElementsCount);
@@ -177,15 +181,15 @@ export class MeshBuilder extends Mesh {
 
         const indexArray = new Uint16Array(this.indices.length);
         indexArray.set(this.indices);
-        this.indexCount = this.indices.length;
+        mesh.indexCount = this.indices.length;
         this.indices = [];
 
-        this.vertexBuffer = createBufferFromData(device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, vertexArray.buffer);
-        device.setResourceName(this.vertexBuffer, "mesh vertex buffer");
-        this.indexBuffer = createBufferFromData(device, GfxBufferUsage.Index, GfxBufferFrequencyHint.Static, indexArray.buffer);
-        device.setResourceName(this.indexBuffer, "mesh index buffer");
+        mesh.vertexBuffer = createBufferFromData(device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, vertexArray.buffer);
+        device.setResourceName(mesh.vertexBuffer, "mesh vertex buffer");
+        mesh.indexBuffer = createBufferFromData(device, GfxBufferUsage.Index, GfxBufferFrequencyHint.Static, indexArray.buffer);
+        device.setResourceName(mesh.indexBuffer, "mesh index buffer");
 
-        this.inputLayout = cache.createInputLayout({
+        mesh.inputLayout = cache.createInputLayout({
             vertexAttributeDescriptors: [
                 {
                     location: Program.a_Position,
@@ -214,6 +218,8 @@ export class MeshBuilder extends Mesh {
 
             indexBufferFormat: GfxFormat.U16_R,
         });
+
+        return mesh;
     }
 }
 
@@ -229,18 +235,33 @@ function segAddr(addr: number): SegmentAddress {
     };
 }
 
-export class DisplayListMeshBuilder extends MeshBuilder {
+export class Interpreter {
     private vtxSegments: Vertex[][] = [];
     private colSegments: Colour[][] = [];
     private vtxCache: Vertex[] = Array<Vertex>(16);
     private colCache: Colour[] = [];
     private geometryMode: GeometryMode = 0; // bitflags
 
-    constructor() {
-        super();
+    private cur: MeshBuilder = new MeshBuilder();
+    private meshes: MeshBuilder[] = [];
 
+    constructor() {
         this.vtxSegments[Segment.BGVtx] = [];
         this.colSegments[Segment.BGCol] = [];
+    }
+
+    private flush() {
+        this.meshes.push(this.cur);
+        this.cur = new MeshBuilder();
+    }
+
+    public build(device: GfxDevice, cache: GfxRenderCache): Mesh[] {
+        this.flush();
+
+        return this.meshes.
+            map(v => v.buildMesh(device, cache)).
+            filter(v => v.isValid())
+        ;
     }
 
     public setSegmentVertices(segment: Segment, vertices: Vertex[]): void {
@@ -300,7 +321,7 @@ export class DisplayListMeshBuilder extends MeshBuilder {
                 break
             default:
                 const cmd = gfx.command() << 24 >> 24;
-                console.warn("unknown command:", cmd, hexzero0x(gfx.command()).slice(8));
+                // DEBUG console.warn("unknown command:", cmd, hexzero0x(gfx.command()).slice(8));
         }
     }
 
@@ -349,7 +370,7 @@ export class DisplayListMeshBuilder extends MeshBuilder {
             }
         });
 
-        this.pushFace(verts);
+        this.cur.pushFace(verts);
     }
 
     private gSPTri4(gfx: GFX): void {

@@ -310,7 +310,7 @@ class SceneDesc implements Viewer.SceneDesc {
     public async createScene(device: GfxDevice, sceneContext: SceneContext): Promise<Viewer.SceneGfx> {
         const stage: Stage|undefined = stages.find(v => v.id === this.stageID);
         if (stage === undefined) {
-            throw new Error(`StageID ${this.stageID} not found`);
+            throw new Error(`StageID ${hexzero0x(this.stageID, 2)} not found`);
         }
 
         const bgJSON = await sceneContext.dataFetcher.fetchData(`${pathBase}/${stage.bgPath}.json`);

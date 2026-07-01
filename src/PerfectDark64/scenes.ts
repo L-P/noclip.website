@@ -2,11 +2,13 @@ import * as RDP from "../Common/N64/RDP";
 import * as UI from "../ui";
 import * as Viewer from "../viewer";
 import ArrayBufferSlice from "../ArrayBufferSlice";
+import { AABB } from "../Geometry";
 import { GfxBlendFactor, GfxBlendMode, GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxCullMode, GfxDevice, GfxFormat, GfxInputLayout, GfxMipFilterMode, GfxProgram, GfxSampler, GfxTexFilterMode, GfxTexture, GfxVertexBufferFrequency, GfxWrapMode, makeTextureDescriptor2D, GfxMegaStateDescriptor } from "../gfx/platform/GfxPlatform";
-import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
 import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
+import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
 import { GfxrAttachmentSlot } from "../gfx/render/GfxRenderGraph";
 import { IS_DEVELOPMENT } from "../BuildVersion";
+import { ImageFormat, ImageSize, r5g5b5a1, decodeTex_CI4, decodeTex_CI8, decodeTex_IA8, decodeTex_RGBA16, decodeTex_RGBA32, decodeTex_I8, decodeTex_I4, decodeTex_IA16, parseTLUT, TextureLUT, decodeTex_IA4, } from "../Common/N64/Image";
 import { SceneContext } from "../SceneBase";
 import { computeViewMatrix, computeViewMatrixSkybox } from '../Camera.js';
 import { fillMatrix4x3, fillMatrix4x4, fillVec4 } from "../gfx/helpers/UniformBufferHelpers";
@@ -15,20 +17,21 @@ import { makeBackbufferDescSimple, makeAttachmentClearDescriptor, opaqueBlackFul
 import { makeSortKey, GfxRendererLayer, GfxRenderInst, GfxRenderInstList } from "../gfx/render/GfxRenderInstManager";
 import { mat4 } from "gl-matrix";
 import { setAttachmentStateSimple } from '../gfx/helpers/GfxMegaStateDescriptorHelpers';
-import { ImageFormat, ImageSize, r5g5b5a1, decodeTex_CI4, decodeTex_CI8, decodeTex_IA8, decodeTex_RGBA16, decodeTex_RGBA32, decodeTex_I8, decodeTex_I4, decodeTex_IA16, parseTLUT, TextureLUT, decodeTex_IA4, } from "../Common/N64/Image";
 
-import { RoomBlockType, Block, BGSegment, Room} from "./bg";
-import { Program } from "./shaders";
-import { Vertex, GFX, Segment, Mesh, Interpreter } from "./f3dex";
-import { Stage, StageID, stages } from "./stages";
 import * as tex from "./tex";
 import { NumTextures } from "./rom";
+import { Program } from "./shaders";
+import { RoomBlockType, Block, BGSegment, Room} from "./bg";
+import { Stage, StageID, stages } from "./stages";
+import { toReadonlyVec3, Vertex, GFX, Segment, Mesh, Interpreter } from "./f3dex";
 
 const pathBase = `PerfectDark64/`;
 
 interface SceneRoom {
     number: number;
     pos: Vertex; // only used for xyz
+    bbox: AABB;
+    absoluteBBox: AABB;
 
     opaque: Mesh[];
     translucent: Mesh[];
@@ -86,9 +89,24 @@ class Scene implements Viewer.SceneGfx {
 
     private buildSceneRooms(device: GfxDevice, seg: BGSegment): SceneRoom[] {
         return seg.rooms.map(room => {
+            const bbox = new AABB(
+                room.bbox.min[0],
+                room.bbox.min[1],
+                room.bbox.min[2],
+                room.bbox.max[0],
+                room.bbox.max[1],
+                room.bbox.max[2],
+            );
+
+            // Room bboxes are in their own origin space, we'll need them in world space.
+            const absoluteBBox = bbox.clone();
+            absoluteBBox.offset(absoluteBBox, toReadonlyVec3(room.pos));
+
             return {
                 number: room.number,
                 pos: room.pos,
+                bbox: bbox,
+                absoluteBBox: absoluteBBox,
                 opaque: this.buildBlockTree(device, room, room.opaqueRoot),
                 translucent: this.buildBlockTree(device, room, room.translucentRoot),
             };
@@ -199,6 +217,10 @@ class Scene implements Viewer.SceneGfx {
     private renderSceneRooms(rooms: SceneRoom[], viewerInput: Viewer.ViewerRenderInput , template: GfxRenderInst): void {
         rooms.forEach(room => {
             if (room.number === this.stage.skyRoom) {
+                return;
+            }
+
+            if (!viewerInput.camera.frustum.contains(room.absoluteBBox)) {
                 return;
             }
 

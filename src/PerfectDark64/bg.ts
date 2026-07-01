@@ -1,4 +1,5 @@
 import ArrayBufferSlice from "../ArrayBufferSlice";
+import { AABB } from "../Geometry";
 import { assert, hexzero0x, readString } from "../util";
 import { vec3 } from "gl-matrix";
 
@@ -11,6 +12,7 @@ import {
     gfxStructSize,
     loadVertexFromView,
     vertexStructSize,
+    toReadonlyVec3,
 } from "./f3dex";
 import { Inflater } from "./rom";
 
@@ -96,6 +98,9 @@ export class Room {
 
     // Raw vertices, loaded as-is into the RSP the 0x0E segment.
     vertices: Vertex[];
+
+    // We compute this ourselves, no need to load section 3.
+    bbox: AABB;
 
     colours: Colour[];
 
@@ -366,10 +371,14 @@ function loadRooms(
         const gfx = decompress(seg.subarray(offset, len));
         const gfxView = gfx.createDataView();
         const gfxDataHeader = readRoomGFXDataHeader(gfxView, bgRoom.roomOffset);
+        const vertices = loadRoomGFXDataVertices(gfxDataHeader, gfxView);
+        let bbox = new AABB();
+        bbox.setFromPoints(vertices.map(v => toReadonlyVec3(v)));
 
         let room = new Room({
             number: i,
-            vertices: loadRoomGFXDataVertices(gfxDataHeader, gfxView),
+            vertices: vertices,
+            bbox: bbox,
             blocks: loadRoomGFXDataBlocks(gfxDataHeader, bgRoom.roomOffset, gfx),
             blockOffsetMap: new Map<number, number>(),
             serializedBlockOffsetMap: [],

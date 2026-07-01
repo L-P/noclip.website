@@ -4,7 +4,7 @@ import { GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxCullMode, GfxDevi
 import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { createBufferFromData } from "../gfx/helpers/BufferHelpers";
 import { nArray, assert, hexzero0x } from "../util";
-import { vec4 } from 'gl-matrix';
+import { ReadonlyVec3, vec4 } from 'gl-matrix';
 
 import { Program } from "./shaders";
 import * as tex from "./tex";
@@ -21,6 +21,10 @@ export interface Vertex {
 };
 export const vertexStructSize = 12;
 const vertexElementsCount = 7;
+
+export function toReadonlyVec3(v: Vertex): ReadonlyVec3 {
+    return [v.x, v.y, v.z];
+}
 
 // Vertex as used by our shader.
 interface ComputedVertex extends Vertex {
@@ -326,7 +330,7 @@ export class Interpreter {
     private DP_TMemTracker = new Map<number, number>();
 
     private cur: MeshBuilder = new MeshBuilder();
-    private meshes: Map<number, MeshBuilder> = new Map();
+    private meshes: MeshBuilder[] = [];
 
     constructor(
         private textureCache: tex.TextureListHolder,
@@ -337,10 +341,8 @@ export class Interpreter {
 
     private flush() {
         if (this.cur !== null) {
-            // HACK: A different mode should generate an entire separate
-            // drawcall but I'm only indexing on textures right now.
             this.cur.geometryMode = this.geometryMode;
-            this.meshes.set(this.cur.textureNumber ?? -1, this.cur);
+            this.meshes.push(this.cur);
         }
 
         this.cur = new MeshBuilder();
@@ -698,11 +700,6 @@ export class Interpreter {
 
         if (this.cur.indices.length > 0) {
             this.flush();
-        }
-
-        const mesh: MeshBuilder | undefined = this.meshes.get(textureNumber);
-        if (mesh !== undefined) {
-            this.cur = mesh;
         }
 
         const viewerTexture = this.textureCache.getByTextureNumber(textureNumber);

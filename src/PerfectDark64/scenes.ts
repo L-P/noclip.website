@@ -15,8 +15,9 @@ import { fillMatrix4x3, fillMatrix4x4, fillVec4 } from "../gfx/helpers/UniformBu
 import { hexzero0x } from "../util";
 import { makeBackbufferDescSimple, makeAttachmentClearDescriptor, opaqueBlackFullClearRenderPassDescriptor, standardFullClearRenderPassDescriptor } from '../gfx/helpers/RenderGraphHelpers.js';
 import { makeSortKey, GfxRendererLayer, GfxRenderInst, GfxRenderInstList } from "../gfx/render/GfxRenderInstManager";
-import { mat4 } from "gl-matrix";
+import { vec3, mat4 } from "gl-matrix";
 import { setAttachmentStateSimple } from '../gfx/helpers/GfxMegaStateDescriptorHelpers';
+import { drawScreenSpaceText, drawWorldSpaceText, getDebugOverlayCanvas2D } from '../DebugJunk'
 
 import * as tex from "./tex";
 import { NumTextures } from "./rom";
@@ -27,14 +28,30 @@ import { toReadonlyVec3, Vertex, GFX, Segment, Mesh, Interpreter } from "./f3dex
 
 const pathBase = `PerfectDark64/`;
 
-interface SceneRoom {
-    number: number;
-    pos: Vertex; // only used for xyz
-    bbox: AABB;
-    absoluteBBox: AABB;
+class SceneRoom {
+    public number: number;
+    public pos: Vertex; // only used for xyz
+    public bbox: AABB;
+    public absoluteBBox: AABB;
 
-    opaque: Mesh[];
-    translucent: Mesh[];
+    public opaque: Mesh[];
+    public translucent: Mesh[];
+
+    public constructor(props?:Partial<SceneRoom>) {
+        Object.assign(this, props);
+
+        this.name = hexzero0x(this.number, 4);
+        // Room bboxes are in their own origin space, we'll need them in world space.
+        this.absoluteBBox = this.bbox.clone();
+        this.absoluteBBox.offset(this.absoluteBBox, toReadonlyVec3(this.pos));
+    }
+
+    // UI.Layer
+    public name: string;
+    public visible: boolean = true;
+    public setVisible(v: boolean): void {
+        this.visible = v;
+    }
 }
 
 class Scene implements Viewer.SceneGfx {
@@ -44,9 +61,11 @@ class Scene implements Viewer.SceneGfx {
     private renderInstListMain = new GfxRenderInstList();
     private gfxProgram: GfxProgram | null = null;
     private linearSampler: GfxSampler;
-    private rooms: SceneRoom[];
+    private rooms: Map<number, SceneRoom>;
     private skyColor = standardFullClearRenderPassDescriptor;
 
+    private shouldEnableHardcodedHacks: boolean = true;
+    private shouldDisplayRoomIDs: boolean = false;
     private shouldEnableTextures: boolean = true;
     private shouldEnableVertexColors: boolean = true;
     private shouldRenderSkybox: boolean = true;
@@ -87,30 +106,27 @@ class Scene implements Viewer.SceneGfx {
         return ret;
     }
 
-    private buildSceneRooms(device: GfxDevice, seg: BGSegment): SceneRoom[] {
-        return seg.rooms.map(room => {
-            const bbox = new AABB(
-                room.bbox.min[0],
-                room.bbox.min[1],
-                room.bbox.min[2],
-                room.bbox.max[0],
-                room.bbox.max[1],
-                room.bbox.max[2],
-            );
+    private buildSceneRooms(device: GfxDevice, seg: BGSegment): Map<number, SceneRoom> {
+        var ret: Map<number, SceneRoom> = new Map();
 
-            // Room bboxes are in their own origin space, we'll need them in world space.
-            const absoluteBBox = bbox.clone();
-            absoluteBBox.offset(absoluteBBox, toReadonlyVec3(room.pos));
-
-            return {
+        seg.rooms.forEach(room => {
+            ret.set(room.number, new SceneRoom({
                 number: room.number,
                 pos: room.pos,
-                bbox: bbox,
-                absoluteBBox: absoluteBBox,
+                bbox: new AABB( // did not survive serialization
+                    room.bbox.min[0],
+                    room.bbox.min[1],
+                    room.bbox.min[2],
+                    room.bbox.max[0],
+                    room.bbox.max[1],
+                    room.bbox.max[2],
+                ),
                 opaque: this.buildBlockTree(device, room, room.opaqueRoot),
                 translucent: this.buildBlockTree(device, room, room.translucentRoot),
-            };
+            }));
         });
+
+        return ret;
     }
 
     private buildBlockTree(device: GfxDevice, room: Room, rootIndex: number | undefined): Mesh[] {
@@ -155,6 +171,7 @@ class Scene implements Viewer.SceneGfx {
             numUniformBuffers: 1,
         }]);
 
+        this.updateHarcodedHacks(viewerInput);
         this.renderSkybox(viewerInput, template);
         this.renderSceneRooms(this.rooms, viewerInput, template);
 
@@ -190,6 +207,126 @@ class Scene implements Viewer.SceneGfx {
         this.renderInstListSky.reset();
     }
 
+    // The original portal-based renderer doesn't make sense when you go OOB so
+    // room overlaps need to be handled the hacky way.
+    public updateHarcodedHacks(viewerInput: Viewer.ViewerRenderInput): void {
+        let pos = vec3.create();
+        pos = vec3.transformMat4(pos, vec3.create(), viewerInput.camera.worldMatrix);
+        let currentRoom = 0x00;
+        this.rooms.forEach(room => {
+            if (room.absoluteBBox.containsPoint(pos)) {
+                currentRoom = room.number;
+            }
+        });
+
+        if (this.shouldDisplayRoomIDs) {
+            drawScreenSpaceText( // DEBUG
+                getDebugOverlayCanvas2D(),
+                50, 50,
+                [pos[0].toFixed(2), pos[1].toFixed(2), pos[2].toFixed(2), hexzero0x(currentRoom || 0, 2)].join(', '),
+            );
+        }
+
+        if (!this.shouldEnableHardcodedHacks) {
+            return;
+        }
+
+        switch(this.stage.id) {
+            case StageID.Villa:
+                this.updateVillaHacks(currentRoom, pos);
+                break;
+
+            case StageID.Extraction:
+            case StageID.MisterBlondesRevenge:
+            case StageID.Defection:
+                this.updateDDTowerHacks(currentRoom, pos);
+                break;
+
+            case StageID.Defense:
+            case StageID.Duel:
+                this.updateInstituteHacks(currentRoom, pos);
+                break;
+
+            case StageID.Infiltration:
+            case StageID.Rescue:
+            case StageID.Escape:
+            case StageID.MaianSOS:
+                this.updateArea51Hacks(currentRoom, pos);
+                break;
+        }
+    }
+
+    public updateDDTowerHacks(currentRoom: number, pos: vec3): void {
+        { // There one skybox for the ground floor, one for the others.
+            const threshold = -4200;
+            const lower = [0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14];
+            const upper = [0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c];
+
+            lower.forEach(v => this.rooms.get(v)!.setVisible(pos[1] <= threshold));
+            upper.forEach(v => this.rooms.get(v)!.setVisible(pos[1] > threshold));
+        }
+
+        { // Intro buildings should not be visible unless OOB.
+            const intro = [0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7];
+            intro.forEach(v => {
+                this.rooms.get(v)!.setVisible(
+                    intro.includes(currentRoom) || currentRoom === 0x00
+                );
+            });
+        }
+    }
+
+    public updateInstituteHacks(currentRoom: number, pos: vec3): void {
+        // This place is a mess. Actually implementing portals might be quicker
+        // than finding hacky workarounds.
+    }
+
+    public updateArea51Hacks(currentRoom: number, pos: vec3): void {
+        // The two dissection areas overlap, it's also visible from the rooms leading up to them.
+        const sectionA = [0x90, 0x91, 0x92, 0x93, 0x94, 0x99, 0x9a, 0x98, 0x96, 0x97, 0x97, 0x95];
+        const sectionB = [0x80, 0x81, 0x82, 0x83, 0x84, 0x89, 0x8a, 0x88, 0x86, 0x87, 0x87, 0x85];
+        if (currentRoom === 0x00 || !sectionA.concat(sectionB).includes(currentRoom)) {
+            sectionA.forEach(v => this.rooms.get(v)!.setVisible(true));
+            sectionB.forEach(v => this.rooms.get(v)!.setVisible(true));
+            return;
+        }
+
+        let sectionAbbox = new AABB();
+        let sectionBbbox = new AABB();
+        sectionA.forEach(v => sectionAbbox.union(sectionAbbox, this.rooms.get(v)!.absoluteBBox));
+        sectionB.forEach(v => sectionBbbox.union(sectionBbbox, this.rooms.get(v)!.absoluteBBox));
+
+        const threshold = (sectionAbbox.max[0] + sectionBbbox.min[0]) / 2;
+        sectionA.forEach(v => this.rooms.get(v)!.setVisible(pos[0] < threshold));
+        sectionB.forEach(v => this.rooms.get(v)!.setVisible(pos[0] >= threshold));
+    }
+
+    public updateVillaHacks(currentRoom: number, pos: vec3): void {
+        // Single floating tri above the map.
+        this.rooms.get(0x58)!.setVisible(false);
+
+        { // Generator and wind turbine rooms overlap.
+            const generator = this.rooms.get(0x72)!;
+            const turbine = this.rooms.get(0x61)!;
+            const threshold = -20 + (turbine.absoluteBBox.min[1] + generator.absoluteBBox.max[1]) / 2;
+
+            // Undesirable everywhere above the floor of the turbine room.
+            generator.setVisible(pos[1] < threshold);
+
+            // Undesirable when viewed from the generator room and a few rooms leading to it.
+            turbine.setVisible(true);
+            if (generator.visible) {
+                turbine.setVisible(![generator.number, 0x73, 0x74, 0x75].includes(currentRoom));
+            }
+        }
+
+        { // Minor overlap in kitchen.
+            const exterior = this.rooms.get(0x55)!;
+            const inKitchen = [0x10, 0x11, 0x12].includes(currentRoom);
+            exterior.setVisible(!inKitchen);
+        }
+    }
+
     private renderSkybox(viewerInput: Viewer.ViewerRenderInput, template: GfxRenderInst): void {
         if (!this.shouldRenderSkybox) {
             return
@@ -199,7 +336,7 @@ class Scene implements Viewer.SceneGfx {
             return;
         }
 
-        const skyRoom = this.rooms.find(v => v.number === this.stage.skyRoom);
+        const skyRoom = this.rooms.get(this.stage.skyRoom);
         if (skyRoom === undefined) {
             return;
         }
@@ -214,14 +351,29 @@ class Scene implements Viewer.SceneGfx {
         });
     }
 
-    private renderSceneRooms(rooms: SceneRoom[], viewerInput: Viewer.ViewerRenderInput , template: GfxRenderInst): void {
+    private renderSceneRooms(rooms: Map<number, SceneRoom>, viewerInput: Viewer.ViewerRenderInput , template: GfxRenderInst): void {
         rooms.forEach(room => {
             if (room.number === this.stage.skyRoom) {
                 return;
             }
 
+            if (!room.visible) {
+                return;
+            }
+
             if (!viewerInput.camera.frustum.contains(room.absoluteBBox)) {
                 return;
+            }
+
+            if (this.shouldDisplayRoomIDs) {
+                let center = vec3.create();
+                room.absoluteBBox.centerPoint(center);
+                drawWorldSpaceText(
+                    getDebugOverlayCanvas2D(),
+                    viewerInput.camera.clipFromWorldMatrix,
+                    center,
+                    hexzero0x(room.number, 4),
+                );
             }
 
             this.renderSceneRoom(room, viewerInput, template).forEach(inst => {
@@ -325,9 +477,31 @@ class Scene implements Viewer.SceneGfx {
     }
 
     public createPanels(): UI.Panel[] {
+        return [
+            new UI.LayerPanel(Array.from(this.rooms.values())),
+            this.createRenderHacksPanel(),
+        ];
+    }
+
+    private createRenderHacksPanel(): UI.Panel {
         const panel = new UI.Panel();
         panel.customHeaderBackgroundColor = UI.COOL_BLUE_COLOR;
         panel.setTitle(UI.RENDER_HACKS_ICON, 'Render Settings');
+
+        const enableHardcodedHacks = new UI.Checkbox('Enable hardcoded room display checks', this.shouldEnableHardcodedHacks);
+        enableHardcodedHacks.onchanged = () => {
+            this.shouldEnableHardcodedHacks = enableHardcodedHacks.checked;
+            if (!this.shouldEnableHardcodedHacks) {
+                this.rooms.forEach(v => v.setVisible(true));
+            }
+        };
+        panel.contents.appendChild(enableHardcodedHacks.elem);
+
+        const displayRoomIDs = new UI.Checkbox('Display Room IDs', this.shouldDisplayRoomIDs);
+        displayRoomIDs.onchanged = () => {
+            this.shouldDisplayRoomIDs = displayRoomIDs.checked;
+        };
+        panel.contents.appendChild(displayRoomIDs.elem);
 
         const enableTexturesCheckbox = new UI.Checkbox('Enable textures', this.shouldEnableTextures);
         enableTexturesCheckbox.onchanged = () => {
@@ -361,7 +535,7 @@ class Scene implements Viewer.SceneGfx {
         };
         panel.contents.appendChild(renderTranslucentCheckbox.elem);
 
-        return [panel];
+        return panel;
     }
 }
 

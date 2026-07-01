@@ -115,6 +115,25 @@ enum GeometryMode {
     G_CLIPPING           = 0x00000000,
 }
 
+function translateCullMode(gm: GeometryMode): GfxCullMode {
+    const cullFront = !!(gm & GeometryMode.G_CULL_FRONT);
+    const cullBack = !!(gm & GeometryMode.G_CULL_BACK);
+
+    // There's LOTS of these and I don't know what to make of it.
+    // It's used where I would have culled back faces so that's what I'll do.
+    const cullBoth = !!(gm & GeometryMode.G_CULL_BOTH);
+
+    if (cullBoth || cullBack) {
+        return GfxCullMode.Back;
+    }
+
+    if (cullFront) {
+        return GfxCullMode.Front;
+    }
+
+    return GfxCullMode.None;
+}
+
 function bitfield(v: number, pos: number, width: number): number {
 	return (v >>> pos) & ((1<<width) - 1);
 }
@@ -155,6 +174,7 @@ export class Mesh {
     public indexCount: number = 0;
     public isSkybox: boolean = false;
     public texture: GfxTexture | null = null;
+    public cullMode: GfxCullMode = GfxCullMode.None;
 
     // Returns true if the mesh has been successfuly built an can be rendered.
     public isValid(): boolean {
@@ -176,6 +196,7 @@ export class MeshBuilder {
     public indices: number[] = [];
     public texture: GfxTexture | null = null;
     public textureNumber: number | null = null;
+    public geometryMode: GeometryMode = 0;
 
     public vtxToIndex: Map<string, number> = new Map();
 
@@ -214,6 +235,7 @@ export class MeshBuilder {
         }
 
         mesh.texture = this.texture;
+        mesh.cullMode = translateCullMode(this.geometryMode);
 
         const vertexArray = new Float32Array(this.vertices.length * computedVertexElementsCount);
         this.vertices.forEach((v, i) => {
@@ -315,6 +337,9 @@ export class Interpreter {
 
     private flush() {
         if (this.cur !== null) {
+            // HACK: A different mode should generate an entire separate
+            // drawcall but I'm only indexing on textures right now.
+            this.cur.geometryMode = this.geometryMode;
             this.meshes.set(this.cur.textureNumber ?? -1, this.cur);
         }
 

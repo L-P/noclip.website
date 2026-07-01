@@ -236,7 +236,7 @@ class Scene implements Viewer.SceneGfx {
         viewerInput: Viewer.ViewerRenderInput,
         template: GfxRenderInst,
     ): GfxRenderInst {
-        const data = template.allocateUniformBufferF32(Program.ub_SceneParams, (4*4) + (3*4) );
+        const data = template.allocateUniformBufferF32(Program.ub_SceneParams, (4*4) + (3*4) + 4);
         let offs = 0;
 
         if (mesh.isSkybox) {
@@ -251,6 +251,9 @@ class Scene implements Viewer.SceneGfx {
         let mat = mat4.create();
         mat4.translate(mat, mat, [pos.x, pos.y, pos.z]);
         offs += fillMatrix4x3(data, offs, mat);
+
+        data[offs] = +(mesh.texture !== null);
+        offs++;
 
         if (this.gfxProgram === null) {
             this.gfxProgram = this.renderHelper.renderCache.createProgram(this.createProgram());
@@ -272,7 +275,7 @@ class Scene implements Viewer.SceneGfx {
         renderInst.setDrawCount(mesh.indexCount);
 
         let megaStateFlags: Partial<GfxMegaStateDescriptor> = {
-            cullMode: GfxCullMode.Back,
+            cullMode: mesh.cullMode,
         };
 
         setAttachmentStateSimple(megaStateFlags, {

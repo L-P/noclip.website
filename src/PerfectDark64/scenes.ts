@@ -8,7 +8,7 @@ import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
 import { GfxrAttachmentSlot } from "../gfx/render/GfxRenderGraph";
 import { IS_DEVELOPMENT } from "../BuildVersion";
-import { ImageFormat, ImageSize, r5g5b5a1, decodeTex_CI4, decodeTex_CI8, decodeTex_IA8, decodeTex_RGBA16, decodeTex_RGBA32, decodeTex_I8, decodeTex_I4, decodeTex_IA16, parseTLUT, TextureLUT, decodeTex_IA4, } from "../Common/N64/Image";
+import { ImageFormat, ImageSize, r5g5b5a1 } from "../Common/N64/Image";
 import { SceneContext } from "../SceneBase";
 import { computeViewMatrix, computeViewMatrixSkybox } from '../Camera.js';
 import { fillMatrix4x3, fillMatrix4x4, fillVec4 } from "../gfx/helpers/UniformBufferHelpers";
@@ -572,18 +572,8 @@ async function loadViewerTextures(sceneContext: SceneContext, device: GfxDevice)
             r5g5b5a1(lut, i * 4, v);
         });
 
-        const dst = new Uint8Array(texture.width * texture.height * 4);
-        const indices = bin.subarray(texture.offset, texture.size);
-        const view = tex.preprocess(texture, indices).createDataView();
-
-        switch (texture.format) {
-        case tex.Format.RGBA16_CI8:
-            decodeTex_CI8(dst, view, 0, texture.width, texture.height, lut);
-            break;
-        case tex.Format.RGBA16_CI4:
-            decodeTex_CI4(dst, view, 0, texture.width, texture.height, lut);
-            break;
-        }
+        const view = bin.subarray(texture.offset, texture.size).createDataView();
+        const decoded = tex.decodeTexture(texture, view, lut);
 
         const gfxTexture = device.createTexture(makeTextureDescriptor2D(
             GfxFormat.U8_RGBA_NORM,
@@ -591,7 +581,7 @@ async function loadViewerTextures(sceneContext: SceneContext, device: GfxDevice)
             1,
         ));
         device.setResourceName(gfxTexture, hexzero0x(texture.index, 4));
-        device.uploadTextureData(gfxTexture, 0, [dst]);
+        device.uploadTextureData(gfxTexture, 0, [decoded]);
 
         const extraInfo: Map<string, string> = new Map();
 

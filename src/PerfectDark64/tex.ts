@@ -2,10 +2,17 @@ import * as UI from '../ui.js';
 import * as Viewer from "../viewer";
 import ArrayBufferSlice from "../ArrayBufferSlice";
 import { assert, hexzero0x, spliceBisectRight } from "../util";
-import { parseTLUT, ImageFormat, ImageSize, TextFilt, TexCM, getSizBitsPerPixel, decodeTex_RGBA16, decodeTex_RGBA32, decodeTex_CI4, decodeTex_CI8, decodeTex_IA4, decodeTex_IA8, decodeTex_IA16, decodeTex_I4, decodeTex_I8, TextureLUT, getTLUTSize } from "../Common/N64/Image.js";
+import {
+    parseTLUT, ImageFormat, ImageSize, TextFilt, TexCM, getSizBitsPerPixel,
+    decodeTex_RGB24, decodeTex_RGBA16, decodeTex_RGBA32, decodeTex_CI4,
+    decodeTex_CI8, decodeTex_IA4, decodeTex_IA8, decodeTex_IA16, decodeTex_I4,
+    decodeTex_I8, TextureLUT, getTLUTSize
+} from "../Common/N64/Image.js";
+
 import { GfxDevice } from "../gfx/platform/GfxPlatform";
 
 import type { Inflater }  from "./rom";
+import BitReader from "./bitreader";
 
 export interface InflatedTexture {
     index: number;
@@ -122,6 +129,25 @@ function toGBILUTMode(format: Format): TextureLUT {
     ][format];
 }
 
+function numChannels(format: Format): number {
+    return [
+         4, 3, 3, 3, 2, 2, 1, 1, 1, 1, 1, 1, 1
+    ][format];
+}
+
+enum CompressionMethod {
+    UNCOMPRESSED0      = 0,
+    UNCOMPRESSED1      = 1,
+    HUFFMAN            = 2, // 6
+    HUFFMANPERHCHANNEL = 3, // 1
+    RLE                = 4, // 156
+    LOOKUP             = 5, // 5
+    HUFFMANLOOKUP      = 6, // 57
+    RLELOOKUP          = 7, // 134
+    HUFFMANBLUR        = 8, // 257 textures
+    RLEBLUR            = 9,
+}
+
 export interface TextureListEntry {
     soundSurfaceType: number; // 4  bits
     surfaceType:      number; // 4  bits
@@ -175,12 +201,86 @@ export function inflateTexture(
     const hasLod = !!((header & 0x80) >> 7);
     const numLods = (header & 0x3f);
 
-    if (!isZlib) {
-        // TODO
-        return data.subarray(0, 0);
+    if (isZlib) {
+        return inflateZlibTexture(texture, data, hasLod, numLods, decompress);
     }
 
-    return inflateZlibTexture(texture, data, hasLod, numLods, decompress);
+    return inflateNonZlibTexture(texture, data);
+}
+
+function inflateNonZlibTexture(
+    texture: InflatedTexture,
+    data: ArrayBufferSlice,
+): ArrayBufferSlice {
+    const view = data.createDataView();
+    let offset = 1; // Skip header.
+    const header = view.getUint32(offset);
+
+    texture.format = header  >>> 28;
+    texture.width  = (header >>> 20) & 0xFF;
+    texture.height = (header >>> 12) & 0xFF;
+    texture.palette = [];
+    const method: CompressionMethod = (header >> 8) & 0x0F;
+
+   switch (method) {
+       case CompressionMethod.RLE:
+           return inflateRLETexture(texture, data);
+   }
+
+   /* console.warn(
+       "unhandled compression method",
+       CompressionMethod[method],
+       Format[format],
+       width,
+       height,
+   ); // */
+
+   return data.subarray(0, 0); // DEBUG TODO
+}
+
+function inflateRLETexture(texture: InflatedTexture, data: ArrayBufferSlice): ArrayBufferSlice {
+    const reader = new BitReader(data);
+    reader.read(32); // skip both headers
+
+    const btFieldSize = reader.read(3);
+    const rlFieldSize = reader.read(3);
+    const blockSize = reader.read(4);
+    let cost = btFieldSize + rlFieldSize + blockSize + 1;
+    let fudge = 0;
+    while (cost > 0) {
+        cost -= blockSize + 1;
+        fudge++;
+    }
+
+    let blocksDone = 0;
+    const blocksTotal = texture.width * texture.height * numChannels(texture.format);
+    const dst = new Uint8Array(blocksTotal);
+
+    if (blockSize > 8) {
+        // Technically handled by the game but I found no texture with that
+        // block size and it'd be too much of a hassle to handle.
+        throw Error("unhandled block size: " + blockSize);
+    }
+
+    while (blocksDone < blocksTotal) {
+        if (reader.read(1) === 0) {
+            dst[blocksDone++] = reader.read(blockSize);
+            continue;
+        }
+
+        const startBlockIndex = blocksDone - reader.read(btFieldSize) - 1;
+        const runNumBlocks = reader.read(rlFieldSize) + fudge;
+
+        if (blockSize <= 8) {
+            for (let i = startBlockIndex; i < startBlockIndex + runNumBlocks; i++) {
+                dst[blocksDone++] = dst[i];
+            }
+
+            dst[blocksDone++] = reader.read(blockSize);
+        }
+    }
+
+    return ArrayBufferSlice.fromView(dst);
 }
 
 // FIXME: Ignore LODs for now.
@@ -211,11 +311,7 @@ function inflateZlibTexture(
     texture.width = view.getUint8(offset++);
     texture.height = view.getUint8(offset++);
 
-    return decompress(data.subarray(offset));
-}
-
-export function preprocess(texture: InflatedTexture, data: ArrayBufferSlice): ArrayBufferSlice {
-    return realign(texture, data);
+    return realign(texture, decompress(data.subarray(offset)));
 }
 
 // Textures must be aligned to 8 bytes per row but are stored without the padding.
@@ -238,6 +334,45 @@ function realign(texture: InflatedTexture, data: ArrayBufferSlice): ArrayBufferS
     }
 
     return data;
+}
+
+export function decodeTexture(texture: InflatedTexture, view: DataView, lut: Uint8Array): Uint8Array {
+    const dst = new Uint8Array(texture.width * texture.height * 4);
+
+    switch (texture.format) {
+    case Format.RGBA32:
+        decodeTex_RGBA32(dst, view, 0, texture.width, texture.height);
+        break;
+    case Format.RGBA16:
+        decodeTex_RGBA16(dst, view, 0, texture.width, texture.height);
+        break;
+    case Format.RGBA16_CI8:
+        decodeTex_CI8(dst, view, 0, texture.width, texture.height, lut);
+        break;
+    case Format.RGBA16_CI4:
+        decodeTex_CI4(dst, view, 0, texture.width, texture.height, lut);
+        break;
+    case Format.RGB24:
+        decodeTex_RGB24(dst, view, 0, texture.width, texture.height);
+        break;
+    case Format.I8:
+        decodeTex_I8(dst, view, 0, texture.width, texture.height);
+        break;
+    case Format.I4:
+        decodeTex_I4(dst, view, 0, texture.width, texture.height);
+        break;
+    case Format.IA8:
+        decodeTex_IA8(dst, view, 0, texture.width, texture.height);
+        break;
+    case Format.IA4:
+        decodeTex_IA4(dst, view, 0, texture.width, texture.height);
+        break;
+    default:
+        console.warn("unhandled:", Format[texture.format])
+        break;
+    }
+
+    return dst;
 }
 
 export class TextureListHolder implements UI.TextureListHolder {
@@ -282,7 +417,11 @@ export class TextureListHolder implements UI.TextureListHolder {
         let changed = false;
         for (let i = 0; i < textures.length; i++) {
             if (this.viewerTextures.find((texture) => textures[i].gfxTexture.ResourceName === texture.gfxTexture.ResourceName) === undefined) {
-                spliceBisectRight(this.viewerTextures, textures[i], (a:Viewer.Texture, b:Viewer.Texture) => a.gfxTexture.ResourceName!.localeCompare(b.gfxTexture.ResourceName!));
+                spliceBisectRight(
+                    this.viewerTextures,
+                    textures[i],
+                    (a:Viewer.Texture, b:Viewer.Texture) => a.gfxTexture.ResourceName!.localeCompare(b.gfxTexture.ResourceName!),
+                );
                 changed = true;
             }
         }

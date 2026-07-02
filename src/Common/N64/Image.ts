@@ -121,6 +121,22 @@ export function decodeTex_RGBA32(dst: Uint8Array, view: DataView, srcIdx: number
     }
 }
 
+export function decodeTex_RGB24(dst: Uint8Array, view: DataView, srcIdx: number, tileW: number, tileH: number): void {
+    let dstIdx = 0;
+    const padW = 0;
+    for (let y = 0; y < tileH; y++) {
+        for (let x = 0; x < tileW; x++) {
+            dst[dstIdx + 0] = view.getUint8(srcIdx);
+            dst[dstIdx + 1] = view.getUint8(srcIdx + 1);
+            dst[dstIdx + 2] = view.getUint8(srcIdx + 2);
+            dst[dstIdx + 3] = 0xFF;
+            srcIdx += 0x03;
+            dstIdx += 0x04;
+        }
+        srcIdx += padW;
+    }
+}
+
 export function decodeTex_CI4(dst: Uint8Array, view: DataView, srcOffs: number, tileW: number, tileH: number, tlutColorTable: Uint8Array, line = 0, deinterleave = false): void {
     let dstIdx = 0;
     let srcIdx = 0;

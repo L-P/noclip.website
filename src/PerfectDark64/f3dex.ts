@@ -1,10 +1,11 @@
-import * as F3DEX from '../BanjoKazooie/f3dex.js';
-import * as RDP from '../Common/N64/RDP.js';
-import { GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxCullMode, GfxDevice, GfxFormat, GfxInputLayout, GfxMipFilterMode, GfxProgram, GfxSampler, GfxTexFilterMode, GfxTexture, GfxVertexBufferFrequency, GfxWrapMode, makeTextureDescriptor2D } from "../gfx/platform/GfxPlatform";
+import * as F3DEX from "../BanjoKazooie/f3dex";
+import * as RDP from "../Common/N64/RDP";
+import { GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxCullMode, GfxDevice, GfxFormat, GfxInputLayout, GfxTexture, GfxVertexBufferFrequency } from "../gfx/platform/GfxPlatform";
 import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
+import { ImageFormat, ImageSize } from "../Common/N64/Image";
+import { ReadonlyVec3, vec4 } from "gl-matrix";
 import { createBufferFromData } from "../gfx/helpers/BufferHelpers";
 import { nArray, assert, hexzero0x } from "../util";
-import { ReadonlyVec3, vec4 } from 'gl-matrix';
 
 import { Program } from "./shaders";
 import * as tex from "./tex";
@@ -559,7 +560,7 @@ export class Interpreter {
     }
 
     public gDPSetTile(fmt: number, siz: number, line: number, tmem: number, tile: number, palette: number, cmt: number, maskt: number, shiftt: number, cms: number, masks: number, shifts: number): void {
-        console.debug("gDPSetTile", fmt, siz, line, tmem, tile, palette, cmt, maskt, shiftt, cms, masks, shifts);
+        // console.debug("gDPSetTile", fmt, siz, line, tmem, tile, palette, cmt, maskt, shiftt, cms, masks, shifts);
         this.DP_TileState[tile].set(fmt, siz, line, tmem, palette, cmt, maskt, shiftt, cms, masks, shifts);
         this.stateChanged = true;
     }
@@ -634,65 +635,19 @@ export class Interpreter {
             return;
         }
 
+        const meta: tex.InflatedTexture = this.textureCache.getMetadata(this.cur.textureNumber!)!;
+
         this.gSPTexture(true /* G_ON */, 0 /* G_TX_RENDERTILE */, 1, 0xFFFF, 0xFFFF);
+        this.gDPSetTextureImage(meta.imageFormat, meta.imageSize, 1, 0);
         this.gDPSetTileSize(0, 0, 0, this.cur.texture!.width, this.cur.texture!.height);
 
         const flag = gfx.w0 & 0x200;
-        const subCommand = gfx.c0(0, 3);
-        switch (subCommand) {
-            case 0:
-                this.texHandleType0(gfx, flag);
-                break;
-            case 1:
-                this.texHandleType1(gfx, flag);
-                break;
-            case 2:
-                this.texHandleType2(gfx, flag);
-                break;
-            case 3:
-                this.texHandleType3(gfx, flag);
-                break;
-            case 4:
-                this.texHandleType4(gfx);
-                break;
-        }
+        const type = gfx.c0(0, 3); // Most common is 2, then 4.
+        // There's some tile and lod management done here per-type, could not
+        // understand if it matters or not. Nothing fixed my UVs.
+        // Only thing I spotted is the wrap mode, mirror is used sometimes.
     }
 
-    private texHandleType0(gfx: GFX, flag: number) {
-        // console.warn("unhandled texHandleType0:", hexzero0x(gfx.w0), hexzero0x(gfx.w1), flag);
-    }
-
-    private texHandleType1(gfx: GFX, flag: number) {
-        // console.debug("texHandleType1:", hexzero0x(gfx.w0), hexzero0x(gfx.w1), flag);
-        const textureNumber2 = (gfx.w1 >> 12) & 0xfff;
-        const min            = (gfx.w1 >> 24) & 0xff;
-        const smode          = (gfx.w0 >> 22) & 3;
-        const tmode          = (gfx.w0 >> 20) & 3;
-        const offset         = (gfx.w0 >> 18) & 3;
-        const shifts         = (gfx.w0 >> 14) & 0xf;
-        const shiftt         = (gfx.w0 >> 10) & 0xf;
-    }
-
-    private texHandleType2(gfx: GFX, flag: number) {
-        // console.debug("texHandleType2:", hexzero0x(gfx.w0), hexzero0x(gfx.w1), flag);
-        const smode  = (gfx.w0 >> 22) & 3;
-        const tmode  = (gfx.w0 >> 20) & 3;
-        const offset = (gfx.w0 >> 18) & 3;
-
-        const meta: tex.InflatedTexture = this.textureCache.getMetadata(this.cur.textureNumber!)!;
-        this.gDPSetTextureImage(meta.imageFormat, meta.imageSize, 1, meta.addr);
-        // After that lods are supposed to be written to tile.
-    }
-
-    private texHandleType3(gfx: GFX, flag: number) {
-        // console.warn("unhandled texHandleType3:", hexzero0x(gfx.w0), hexzero0x(gfx.w1), flag);
-    }
-
-    private texHandleType4(gfx: GFX) {
-        // console.warn("unhandled texHandleType4:", hexzero0x(gfx.w0), hexzero0x(gfx.w1));
-    }
-
-    // Returns the if the texture was found and set.
     public setCurrentTexture(textureNumber: number): boolean {
         if (textureNumber === this.cur.textureNumber) {
             return false;

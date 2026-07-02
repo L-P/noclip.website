@@ -25,10 +25,11 @@ import { Program } from "./shaders";
 import { RoomBlockType, Block, BGSegment, Room} from "./bg";
 import { Stage, StageID, stages } from "./stages";
 import { toReadonlyVec3, Vertex, GFX, Segment, Mesh, Interpreter } from "./f3dex";
+import { updateHarcodedHacks } from './hacks';
 
 const pathBase = `PerfectDark64/`;
 
-class SceneRoom {
+export class SceneRoom {
     public number: number;
     public pos: Vertex; // only used for xyz
     public bbox: AABB;
@@ -171,7 +172,8 @@ class Scene implements Viewer.SceneGfx {
             numUniformBuffers: 1,
         }]);
 
-        this.updateHarcodedHacks(viewerInput);
+        this.handleHacksAndRoomIDs(viewerInput);
+
         this.renderSkybox(viewerInput, template);
         this.renderSceneRooms(this.rooms, viewerInput, template);
 
@@ -207,123 +209,29 @@ class Scene implements Viewer.SceneGfx {
         this.renderInstListSky.reset();
     }
 
-    // The original portal-based renderer doesn't make sense when you go OOB so
-    // room overlaps need to be handled the hacky way.
-    public updateHarcodedHacks(viewerInput: Viewer.ViewerRenderInput): void {
-        let pos = vec3.create();
-        pos = vec3.transformMat4(pos, vec3.create(), viewerInput.camera.worldMatrix);
+    private handleHacksAndRoomIDs(viewerInput: Viewer.ViewerRenderInput): void {
+        let cameraPos = vec3.create();
+        cameraPos = vec3.transformMat4(cameraPos, vec3.create(), viewerInput.camera.worldMatrix);
         let currentRoom = 0x00;
         this.rooms.forEach(room => {
-            if (room.absoluteBBox.containsPoint(pos)) {
+            if (room.absoluteBBox.containsPoint(cameraPos)) {
                 currentRoom = room.number;
             }
         });
-
+        if (this.shouldEnableHardcodedHacks) {
+            updateHarcodedHacks(cameraPos, currentRoom, this.stage.id, this.rooms);
+        }
         if (this.shouldDisplayRoomIDs) {
-            drawScreenSpaceText( // DEBUG
+            drawScreenSpaceText(
                 getDebugOverlayCanvas2D(),
                 50, 50,
-                [pos[0].toFixed(2), pos[1].toFixed(2), pos[2].toFixed(2), hexzero0x(currentRoom || 0, 2)].join(', '),
+                [
+                    cameraPos[0].toFixed(2),
+                    cameraPos[1].toFixed(2),
+                    cameraPos[2].toFixed(2),
+                    hexzero0x(currentRoom || 0, 2),
+                ].join(', '),
             );
-        }
-
-        if (!this.shouldEnableHardcodedHacks) {
-            return;
-        }
-
-        switch(this.stage.id) {
-            case StageID.Villa:
-                this.updateVillaHacks(currentRoom, pos);
-                break;
-
-            case StageID.Extraction:
-            case StageID.MisterBlondesRevenge:
-            case StageID.Defection:
-                this.updateDDTowerHacks(currentRoom, pos);
-                break;
-
-            case StageID.Defense:
-            case StageID.Duel:
-                this.updateInstituteHacks(currentRoom, pos);
-                break;
-
-            case StageID.Infiltration:
-            case StageID.Rescue:
-            case StageID.Escape:
-            case StageID.MaianSOS:
-                this.updateArea51Hacks(currentRoom, pos);
-                break;
-        }
-    }
-
-    public updateDDTowerHacks(currentRoom: number, pos: vec3): void {
-        { // There one skybox for the ground floor, one for the others.
-            const threshold = -4200;
-            const lower = [0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14];
-            const upper = [0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c];
-
-            lower.forEach(v => this.rooms.get(v)!.setVisible(pos[1] <= threshold));
-            upper.forEach(v => this.rooms.get(v)!.setVisible(pos[1] > threshold));
-        }
-
-        { // Intro buildings should not be visible unless OOB.
-            const intro = [0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7];
-            intro.forEach(v => {
-                this.rooms.get(v)!.setVisible(
-                    intro.includes(currentRoom) || currentRoom === 0x00
-                );
-            });
-        }
-    }
-
-    public updateInstituteHacks(currentRoom: number, pos: vec3): void {
-        // This place is a mess. Actually implementing portals might be quicker
-        // than finding hacky workarounds.
-    }
-
-    public updateArea51Hacks(currentRoom: number, pos: vec3): void {
-        // The two dissection areas overlap, it's also visible from the rooms leading up to them.
-        const sectionA = [0x90, 0x91, 0x92, 0x93, 0x94, 0x99, 0x9a, 0x98, 0x96, 0x97, 0x97, 0x95];
-        const sectionB = [0x80, 0x81, 0x82, 0x83, 0x84, 0x89, 0x8a, 0x88, 0x86, 0x87, 0x87, 0x85];
-        if (currentRoom === 0x00 || !sectionA.concat(sectionB).includes(currentRoom)) {
-            sectionA.forEach(v => this.rooms.get(v)!.setVisible(true));
-            sectionB.forEach(v => this.rooms.get(v)!.setVisible(true));
-            return;
-        }
-
-        let sectionAbbox = new AABB();
-        let sectionBbbox = new AABB();
-        sectionA.forEach(v => sectionAbbox.union(sectionAbbox, this.rooms.get(v)!.absoluteBBox));
-        sectionB.forEach(v => sectionBbbox.union(sectionBbbox, this.rooms.get(v)!.absoluteBBox));
-
-        const threshold = (sectionAbbox.max[0] + sectionBbbox.min[0]) / 2;
-        sectionA.forEach(v => this.rooms.get(v)!.setVisible(pos[0] < threshold));
-        sectionB.forEach(v => this.rooms.get(v)!.setVisible(pos[0] >= threshold));
-    }
-
-    public updateVillaHacks(currentRoom: number, pos: vec3): void {
-        // Single floating tri above the map.
-        this.rooms.get(0x58)!.setVisible(false);
-
-        { // Generator and wind turbine rooms overlap.
-            const generator = this.rooms.get(0x72)!;
-            const turbine = this.rooms.get(0x61)!;
-            const threshold = -20 + (turbine.absoluteBBox.min[1] + generator.absoluteBBox.max[1]) / 2;
-
-            // Undesirable everywhere above the floor of the turbine room.
-            generator.setVisible(pos[1] < threshold);
-
-            // Undesirable when viewed from the generator room and a few rooms leading to it.
-            turbine.setVisible(true);
-            if (generator.visible) {
-                turbine.setVisible(![generator.number, 0x73, 0x74, 0x75].includes(currentRoom));
-            }
-        }
-
-        { // Minor overlap in kitchen.
-            const exterior = this.rooms.get(0x55)!;
-            const inKitchen = [0x10, 0x11, 0x12].includes(currentRoom);
-            exterior.setVisible(!inKitchen);
         }
     }
 

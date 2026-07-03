@@ -1,6 +1,10 @@
 import * as F3DEX from "../BanjoKazooie/f3dex";
 import * as RDP from "../Common/N64/RDP";
-import { GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxCullMode, GfxDevice, GfxFormat, GfxInputLayout, GfxTexture, GfxVertexBufferFrequency } from "../gfx/platform/GfxPlatform";
+import {
+    GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxCullMode, GfxDevice,
+    GfxFormat, GfxInputLayout, GfxTexture, GfxVertexBufferFrequency,
+    GfxWrapMode,
+} from "../gfx/platform/GfxPlatform";
 import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { ImageFormat, ImageSize } from "../Common/N64/Image";
 import { ReadonlyVec3, vec4 } from "gl-matrix";
@@ -180,6 +184,8 @@ export class Mesh {
     public isSkybox: boolean = false;
     public texture: GfxTexture | null = null;
     public cullMode: GfxCullMode = GfxCullMode.None;
+    public wrapS: GfxWrapMode = GfxWrapMode.Repeat;
+    public wrapT: GfxWrapMode = GfxWrapMode.Repeat;
 
     // Returns true if the mesh has been successfuly built an can be rendered.
     public isValid(): boolean {
@@ -202,6 +208,8 @@ export class MeshBuilder {
     public texture: GfxTexture | null = null;
     public textureNumber: number | null = null;
     public geometryMode: GeometryMode = 0;
+    public wrapS: GfxWrapMode;
+    public wrapT: GfxWrapMode;
 
     public vtxToIndex: Map<string, number> = new Map();
 
@@ -241,6 +249,8 @@ export class MeshBuilder {
 
         mesh.texture = this.texture;
         mesh.cullMode = translateCullMode(this.geometryMode);
+        mesh.wrapS = this.wrapS;
+        mesh.wrapT = this.wrapT;
 
         const vertexArray = new Float32Array(this.vertices.length * computedVertexElementsCount);
         this.vertices.forEach((v, i) => {
@@ -343,6 +353,10 @@ export class Interpreter {
     private flush() {
         if (this.cur !== null) {
             this.cur.geometryMode = this.geometryMode;
+            const tile = this.DP_TileState[this.SP_TextureState.tile];
+            this.cur.wrapT = texModeToGfx(tile.cmt);
+            this.cur.wrapS = texModeToGfx(tile.cms);
+
             this.meshes.push(this.cur);
         }
 
@@ -507,9 +521,16 @@ export class Interpreter {
         ];
 
         verts.forEach(v => {
-            // That's a guess.
+            // Heuristic, could not find where this is done…
             v.s /= 0x400;
-            v.t /= 0x400;
+
+            // … or why.
+            const tile = this.DP_TileState[this.SP_TextureState.tile];
+            if (texModeToGfx(tile.cmt) === GfxWrapMode.Clamp) {
+                v.t /= 0x600;
+            }  else {
+                v.t /= 0x400;
+            }
 
             const col: Colour = this.colCache[v.colour >> 2];
             if (col !== undefined) {
@@ -639,13 +660,31 @@ export class Interpreter {
 
         this.gSPTexture(true /* G_ON */, 0 /* G_TX_RENDERTILE */, 1, 0xFFFF, 0xFFFF);
         this.gDPSetTextureImage(meta.imageFormat, meta.imageSize, 1, 0);
-        this.gDPSetTileSize(0, 0, 0, this.cur.texture!.width, this.cur.texture!.height);
 
         const flag = gfx.w0 & 0x200;
         const type = gfx.c0(0, 3); // Most common is 2, then 4.
-        // There's some tile and lod management done here per-type, could not
-        // understand if it matters or not. Nothing fixed my UVs.
-        // Only thing I spotted is the wrap mode, mirror is used sometimes.
+        const smode  = (gfx.w0 >> 22) & 3;
+        const tmode  = (gfx.w0 >> 20) & 3;
+        const offset = (gfx.w0 >> 18) & 3;
+
+        this.DP_TileState[0].cmt = tmode;
+        this.DP_TileState[0].cms = smode;
+
+        if (offset === 2) {
+            this.DP_TileState[0].uls = 2;
+            this.DP_TileState[0].ult = 2;
+            this.DP_TileState[0].lrs = 2;
+            this.DP_TileState[0].lrt = 2;
+        }
+
+        const base = offset === 2 ? 2 : 0;
+        this.gDPSetTileSize(
+            0,
+            base,
+            base,
+            base + (meta.width - 1) << 2,
+            base + (meta.height - 1) << 2,
+        );
     }
 
     public setCurrentTexture(textureNumber: number): boolean {
@@ -669,4 +708,18 @@ export class Interpreter {
 
         return true;
     }
+}
+
+function texModeToGfx(mode: number): GfxWrapMode {
+    switch(mode) {
+        case 0:
+        default:
+            return GfxWrapMode.Repeat;
+        case 1:
+            return GfxWrapMode.Clamp;
+        case 2:
+            return GfxWrapMode.Mirror;
+    }
+
+    assert(false, "unreachable");
 }

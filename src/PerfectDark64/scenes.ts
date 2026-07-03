@@ -61,7 +61,6 @@ class Scene implements Viewer.SceneGfx {
     private renderInstListSky = new GfxRenderInstList();
     private renderInstListMain = new GfxRenderInstList();
     private gfxProgram: GfxProgram | null = null;
-    private linearSampler: GfxSampler;
     private rooms: Map<number, SceneRoom>;
     private skyColor = standardFullClearRenderPassDescriptor;
 
@@ -84,13 +83,6 @@ class Scene implements Viewer.SceneGfx {
 
         this.skyColor = makeAttachmentClearDescriptor(stage.skyColor);
         this.rooms = this.buildSceneRooms(device, seg);
-        this.linearSampler = cache.createSampler({
-            minFilter: GfxTexFilterMode.Bilinear,
-            magFilter: GfxTexFilterMode.Bilinear,
-            mipFilter: GfxMipFilterMode.Nearest,
-            wrapS: GfxWrapMode.Repeat,
-            wrapT: GfxWrapMode.Repeat,
-        });
     }
 
     private createProgram(): Program {
@@ -341,11 +333,19 @@ class Scene implements Viewer.SceneGfx {
             this.gfxProgram = this.renderHelper.renderCache.createProgram(this.createProgram());
         }
 
+        const sampler = this.renderHelper.renderCache.createSampler({
+            minFilter: GfxTexFilterMode.Bilinear,
+            magFilter: GfxTexFilterMode.Bilinear,
+            mipFilter: GfxMipFilterMode.Nearest,
+            wrapS: mesh.wrapS,
+            wrapT: mesh.wrapT,
+        });
+
         const renderInst = this.renderHelper.renderInstManager.newRenderInst();
         renderInst.setGfxProgram(this.gfxProgram);
         renderInst.setSamplerBindings(0, [{
             gfxTexture: mesh.texture,
-            gfxSampler: this.linearSampler,
+            gfxSampler: sampler,
         }]);
 
         renderInst.setVertexInput(

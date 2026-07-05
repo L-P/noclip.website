@@ -7,7 +7,7 @@ import { stages } from "../stages";
 import ROM from "../rom";
 import type { Inflater }  from "../rom";
 import { Room, BGSegment } from "../bg";
-import { formatBPP, Format, inflateTexture, InflatedTexture } from "../tex";
+import { Format, inflateTexture, InflatedTexture } from "../tex";
 
 const pathROM = `./data/PerfectDark64/pd.ntsc-final.z64`;
 const pathBaseOut = `./data/PerfectDark64/`;
@@ -64,11 +64,6 @@ function writeTextureData(rom: ROM) {
             // FIXME: Silence until we implement other decompression methods.
             // console.warn(`unable to inflate texture #${i}`);
             return;
-        }
-
-        const expectedSize = Math.ceil((formatBPP(texture.format) * texture.width * texture.height) / 8);
-        if (expectedSize !== decompressed.byteLength) {
-            console.warn(`texture #${i} expected ${expectedSize} bytes, got ${decompressed.byteLength}`);
         }
 
         texture.size = decompressed.byteLength;

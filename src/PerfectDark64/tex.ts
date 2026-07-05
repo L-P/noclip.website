@@ -44,37 +44,6 @@ export enum Format {
     IA16_CI4   = 0x0c, // 16-bit 88 paletted greyscale+alpha with 4-bit palette indexes
 }
 
-// Returns the size of each _stored_ pixel in bits. ie. on paletted images it
-// returns the size of the index.
-export function formatBPP(format: Format): number {
-    switch (format) {
-        case Format.RGBA32:
-            return 32;
-        case Format.RGB24:
-            return 24;
-        case Format.RGBA16:
-            return 16;
-        case Format.IA16:
-            return 16;
-        case Format.RGBA16_CI8:
-            return 8;
-        case Format.RGBA16_CI4:
-            return 4;
-        case Format.IA16_CI8:
-            return 8;
-        case Format.IA16_CI4:
-            return 4;
-        case Format.IA8:
-        case Format.I8:
-            return 8;
-        case Format.IA4:
-        case Format.I4:
-            return 4;
-        default:
-            throw new Error("unknown texture format " + hexzero0x(format));
-    }
-}
-
 function toGBIFormat(format: Format): ImageFormat {
     return [
         ImageFormat.G_IM_FMT_RGBA,
@@ -302,9 +271,6 @@ function inflateZlibTexture(
     const nColors = view.getUint8(offset++) + 1;
     for (let i = 0; i < nColors; i++) {
         texture.palette.push(view.getUint16(offset));
-
-        // Do NOT postfix increment the offset in the above call, it somehow
-        // manges the last entry of the palette.
         offset += 2;
     }
 
@@ -314,17 +280,29 @@ function inflateZlibTexture(
     return realign(texture, decompress(data.subarray(offset)));
 }
 
+function indicePerByte(format: Format): number {
+    switch(format) {
+        case Format.RGBA16_CI8:
+        case Format.IA16_CI8:
+            return 1;
+        case Format.RGBA16_CI4:
+        case Format.IA16_CI4:
+            return 2;
+        default:
+            assert(false, "unreachable");
+    }
+}
+
 // Textures must be aligned to 8 bytes per row but are stored without the padding.
 function realign(texture: InflatedTexture, data: ArrayBufferSlice): ArrayBufferSlice {
-    const bpp = formatBPP(texture.format);
-    const indicePerByte = 8 / bpp;
-    const dst = new Uint8Array(Math.ceil(texture.width * texture.height * (bpp / 8)));
+    const ipb = indicePerByte(texture.format);
+    const dst = new Uint8Array((texture.width * texture.height / ipb)|0);
     const view = data.createDataView();
     let inOffset = 0;
     let outOffset = 0;
     for (let y = 0; y < texture.height; y++) {
         var written = 0;
-        for (let x = 0; x < texture.width; x += indicePerByte) {
+        for (let x = 0; x < texture.width; x += ipb) {
             dst[outOffset] = view.getUint8(inOffset);
             outOffset++;
             inOffset++;

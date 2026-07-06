@@ -64,11 +64,19 @@ function expand5to8(n: number): number {
     return ((n << (8 - 5)) | (n >>> (10 - 8))) & 0xFF;
 }
 
-export function r5g5b5a1(dst: Uint8Array, dstOffs: number, p: number) {
+function r5g5b5a1(dst: Uint8Array, dstOffs: number, p: number) {
     dst[dstOffs + 0] = expand5to8((p & 0xF800) >> 11);
     dst[dstOffs + 1] = expand5to8((p & 0x07C0) >> 6);
     dst[dstOffs + 2] = expand5to8((p & 0x003E) >> 1);
     dst[dstOffs + 3] = (p & 0x0001) ? 0xFF : 0x00;
+}
+
+// 8 bits grayscale + 8 bits alpha.
+function i8a8(dst: Uint8Array, dstOffs: number, p: number) {
+    dst[dstOffs + 0] = (p & 0xFF00) >> 8;
+    dst[dstOffs + 1] = (p & 0xFF00) >> 8;
+    dst[dstOffs + 2] = (p & 0xFF00) >> 8;
+    dst[dstOffs + 3] = (p & 0x00FF);
 }
 
 function copyTLUTColor(dst: Uint8Array, dstOffs: number, colorTable: Uint8Array, i: number): void {
@@ -283,13 +291,22 @@ export function decodeTex_I8(dst: Uint8Array, view: DataView, srcOffs: number, t
 }
 
 export function parseTLUT(dst: Uint8Array, view: DataView, idx: number, siz: ImageSize, lutMode: TextureLUT): number {
-    // TODO(jstpierre): non-RGBA16 TLUT modes (comes from TEXTLUT field in SETOTHERMODE_H)
-    assert(lutMode === TextureLUT.G_TT_RGBA16);
+    let translator = null;
+    switch(lutMode) {
+        case TextureLUT.G_TT_RGBA16:
+            translator = r5g5b5a1;
+            break;
+        case TextureLUT.G_TT_IA16:
+            translator = i8a8;
+            break;
+        default:
+            throw new Error(`unhandled LUT format: ${TextureLUT[lutMode]}`);
+    }
 
     const tlutSize = getTLUTSize(siz);
     for (let i = 0; i < tlutSize; i++) {
         const p = view.getUint16(idx);
-        r5g5b5a1(dst, i * 4, p);
+        translator(dst, i * 4, p);
         idx += 0x02;
     }
 

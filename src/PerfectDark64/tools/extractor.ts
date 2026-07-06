@@ -59,7 +59,7 @@ function writeTextureData(rom: ROM) {
 
     rom.textureData.forEach((data, i) => {
         let texture: InflatedTexture = {index: i};
-        const decompressed = inflateTexture(texture, data, decompress);
+        const [decompressed, palette] = inflateTexture(texture, data, decompress);
         if (decompressed.byteLength <= 0) {
             // FIXME: Silence until we implement other decompression methods.
             // console.warn(`unable to inflate texture #${i}`);
@@ -69,7 +69,6 @@ function writeTextureData(rom: ROM) {
         texture.size = decompressed.byteLength;
         texture.offset = inflatedSize;
         texture.addr = rom.textureList[i].dataOffset;
-        meta.push(texture);
 
         const view = decompressed.createDataView();
         for (let i = 0; i < decompressed.byteLength; i++) {
@@ -78,6 +77,25 @@ function writeTextureData(rom: ROM) {
 
         compressedSize += data.byteLength;
         inflatedSize += decompressed.byteLength;
+
+        if (palette === null) {
+            meta.push(texture);
+            return;
+        }
+
+        assert(texture.numColors > 0, "texture has a palette but no colors");
+        const palView = palette.createDataView();
+        texture.palOffset = inflatedSize;
+        texture.palSize = palette.byteLength;
+
+        for (let i = 0; i < palView.byteLength; i++) {
+            bigBin[texture.palOffset + i] = palView.getUint8(i);
+        }
+
+        compressedSize += palette.byteLength;
+        inflatedSize += palette.byteLength;
+
+        meta.push(texture);
     });
 
     bigBin = bigBin.subarray(0, inflatedSize);

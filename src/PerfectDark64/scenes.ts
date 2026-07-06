@@ -8,7 +8,7 @@ import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
 import { GfxrAttachmentSlot } from "../gfx/render/GfxRenderGraph";
 import { IS_DEVELOPMENT } from "../BuildVersion";
-import { ImageFormat, ImageSize, r5g5b5a1 } from "../Common/N64/Image";
+import { parseTLUT, getTLUTSize, ImageFormat, ImageSize } from "../Common/N64/Image";
 import { SceneContext } from "../SceneBase";
 import { computeViewMatrix, computeViewMatrixSkybox } from '../Camera.js';
 import { fillMatrix4x3, fillMatrix4x4, fillVec4 } from "../gfx/helpers/UniformBufferHelpers";
@@ -475,10 +475,16 @@ async function loadViewerTextures(sceneContext: SceneContext, device: GfxDevice)
     const bin = await binPromise;
 
     const viewerTextures = meta.map(texture => {
-        let lut = new Uint8Array(4 * texture.palette.length);
-        texture.palette.forEach((v, i) => {
-            r5g5b5a1(lut, i * 4, v);
-        });
+        let lut = new Uint8Array(4 * texture.numColors);
+        if (texture.numColors > 0) {
+            const originalPalData = bin.subarray(texture.palOffset, texture.palSize).createDataView();
+            const palData = new Uint8Array(getTLUTSize(texture.imageSize) * 2);
+            for (let i = 0; i < texture.palSize; i++) {
+                palData[i] = originalPalData.getUint8(i);
+            }
+
+            parseTLUT(lut, ArrayBufferSlice.fromView(palData).createDataView(), 0, texture.imageSize, texture.lutMode);
+        }
 
         const view = bin.subarray(texture.offset, texture.size).createDataView();
         const decoded = tex.decodeTexture(texture, view, lut);
@@ -497,7 +503,7 @@ async function loadViewerTextures(sceneContext: SceneContext, device: GfxDevice)
         extraInfo.set("Format", tex.Format[texture.format]);
         extraInfo.set("Image format", ImageFormat[texture.imageFormat]);
         extraInfo.set("Image size", ImageSize[texture.imageSize]);
-        extraInfo.set("Palette size", "" + texture.palette.length);
+        extraInfo.set("Palette size", "" + texture.numColors);
 
         return { gfxTexture, extraInfo };
     });

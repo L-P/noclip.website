@@ -3,14 +3,11 @@ import * as Viewer from "../viewer";
 import ArrayBufferSlice from "../ArrayBufferSlice";
 import { assert, hexzero0x, spliceBisectRight } from "../util";
 import {
-    parseTLUT, ImageFormat, ImageSize, TextFilt, TexCM, getSizBitsPerPixel,
-    decodeTex_RGB24, decodeTex_RGBA16, decodeTex_RGBA32, decodeTex_CI4,
-    decodeTex_CI8, decodeTex_IA4, decodeTex_IA8, decodeTex_IA16, decodeTex_I4,
-    decodeTex_I8, TextureLUT, getTLUTSize
-} from "../Common/N64/Image.js";
-
-import { GfxDevice } from "../gfx/platform/GfxPlatform";
-
+    ImageFormat, ImageSize, decodeTex_RGB24, decodeTex_RGBA16,
+    decodeTex_RGBA32, decodeTex_CI4, decodeTex_CI8, decodeTex_IA4,
+    decodeTex_IA8, decodeTex_IA16, decodeTex_I4, decodeTex_I8, TextureLUT
+} from "../Common/N64/Image.js"; import { GfxDevice } from
+"../gfx/platform/GfxPlatform";
 import type { Inflater }  from "./rom";
 import BitReader from "./bitreader";
 
@@ -19,13 +16,17 @@ export interface InflatedTexture {
     format: Format;
     imageFormat: ImageFormat;
     imageSize: ImageSize;
-    palette: number[]; // May be empty depending on format.
+    lutMode: TextureLUT;
     width: number;
     height: number;
 
     addr: number; // original in-ROM texture data addr
     offset: number; // offset in the coalesced texture binary we output
     size: number; // raw pixel data length
+
+    numColors: number;
+    palOffset: number; // offset in the coalesced texture binary we output
+    palSize: number; // raw palette data length
 }
 
 export enum Format {
@@ -159,9 +160,9 @@ export function inflateTexture(
     texture: InflatedTexture,
     data: ArrayBufferSlice,
     decompress: Inflater,
-): ArrayBufferSlice {
+): [ArrayBufferSlice, ArrayBufferSlice|null] /* indices, palette */ {
     if (data.byteLength <= 0) {
-        return data;
+        return [data, null];
     }
 
     const view = data.createDataView();
@@ -174,7 +175,7 @@ export function inflateTexture(
         return inflateZlibTexture(texture, data, hasLod, numLods, decompress);
     }
 
-    return inflateNonZlibTexture(texture, data);
+    return [inflateNonZlibTexture(texture, data), null];
 }
 
 function inflateNonZlibTexture(
@@ -188,7 +189,12 @@ function inflateNonZlibTexture(
     texture.format = header  >>> 28;
     texture.width  = (header >>> 20) & 0xFF;
     texture.height = (header >>> 12) & 0xFF;
-    texture.palette = [];
+    texture.imageFormat = toGBIFormat(texture.format);
+    texture.imageSize = toGBISize(texture.format);
+    texture.lutMode = toGBILUTMode(texture.format);
+    texture.numColors = 0;
+    texture.palOffset = -1;
+    texture.palSize = -1;
     const method: CompressionMethod = (header >> 8) & 0x0F;
 
    switch (method) {
@@ -196,7 +202,8 @@ function inflateNonZlibTexture(
            return inflateRLETexture(texture, data);
    }
 
-   /* console.warn(
+   /* DEBUG
+    console.warn(
        "unhandled compression method",
        CompressionMethod[method],
        Format[format],
@@ -259,25 +266,28 @@ function inflateZlibTexture(
     hasLod: boolean,
     numLods: number,
     decompress: Inflater,
-): ArrayBufferSlice {
+): [ArrayBufferSlice, ArrayBufferSlice] {
     const view = data.createDataView();
     let offset = 1; // Skip header.
 
     texture.format = view.getUint8(offset++);
     texture.imageFormat = toGBIFormat(texture.format);
     texture.imageSize = toGBISize(texture.format);
+    texture.lutMode = toGBILUTMode(texture.format);
+    texture.numColors = view.getUint8(offset++) + 1;
 
-    texture.palette = [];
-    const nColors = view.getUint8(offset++) + 1;
-    for (let i = 0; i < nColors; i++) {
-        texture.palette.push(view.getUint16(offset));
-        offset += 2;
+    // Always 16 bits per color, either r5g5b5a1 or i8a8.
+    const palette = new Uint8Array(texture.numColors * 2);
+    for (let i = 0; i < palette.byteLength; i++) {
+        palette[i] = view.getUint8(offset++);
     }
 
     texture.width = view.getUint8(offset++);
     texture.height = view.getUint8(offset++);
 
-    return realign(texture, decompress(data.subarray(offset)));
+    const indices = realign(texture, decompress(data.subarray(offset)));
+
+    return [indices, ArrayBufferSlice.fromView(palette)];
 }
 
 function indicePerByte(format: Format): number {
@@ -325,9 +335,11 @@ export function decodeTexture(texture: InflatedTexture, view: DataView, lut: Uin
         decodeTex_RGBA16(dst, view, 0, texture.width, texture.height);
         break;
     case Format.RGBA16_CI8:
+    case Format.IA16_CI8:
         decodeTex_CI8(dst, view, 0, texture.width, texture.height, lut);
         break;
     case Format.RGBA16_CI4:
+    case Format.IA16_CI4:
         decodeTex_CI4(dst, view, 0, texture.width, texture.height, lut);
         break;
     case Format.RGB24:

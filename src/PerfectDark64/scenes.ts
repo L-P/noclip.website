@@ -8,7 +8,7 @@ import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
 import { GfxrAttachmentSlot } from "../gfx/render/GfxRenderGraph";
 import { IS_DEVELOPMENT } from "../BuildVersion";
-import { parseTLUT, getTLUTSize, ImageFormat, ImageSize } from "../Common/N64/Image";
+import { TextureLUT, parseTLUT, getTLUTSize, ImageFormat, ImageSize } from "../Common/N64/Image";
 import { SceneContext } from "../SceneBase";
 import { computeViewMatrix, computeViewMatrixSkybox } from '../Camera.js';
 import { fillMatrix4x3, fillMatrix4x4, fillVec4 } from "../gfx/helpers/UniformBufferHelpers";
@@ -499,11 +499,14 @@ async function loadViewerTextures(sceneContext: SceneContext, device: GfxDevice)
 
         const extraInfo: Map<string, string> = new Map();
 
-        extraInfo.set("Number", "" + texture.index);
+        extraInfo.set("Compression", tex.CompressionMethod[texture.compressionMethod]);
         extraInfo.set("Format", tex.Format[texture.format]);
         extraInfo.set("Image format", ImageFormat[texture.imageFormat]);
         extraInfo.set("Image size", ImageSize[texture.imageSize]);
-        extraInfo.set("Palette size", "" + texture.numColors);
+        extraInfo.set("LUT mode", TextureLUT[texture.lutMode]);
+        if (texture.lutMode !== TextureLUT.G_TT_NONE) {
+            extraInfo.set("Palette size", "" + texture.numColors);
+        }
 
         return { gfxTexture, extraInfo };
     });

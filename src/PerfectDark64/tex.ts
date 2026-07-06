@@ -1,12 +1,13 @@
-import * as UI from '../ui.js';
+import * as UI from "../ui";
 import * as Viewer from "../viewer";
 import ArrayBufferSlice from "../ArrayBufferSlice";
 import { assert, hexzero0x, spliceBisectRight } from "../util";
+import { texturePadWidth } from "../Common/N64/RDP";
 import {
     ImageFormat, ImageSize, decodeTex_RGB24, decodeTex_RGBA16,
     decodeTex_RGBA32, decodeTex_CI4, decodeTex_CI8, decodeTex_IA4,
-    decodeTex_IA8, decodeTex_IA16, decodeTex_I4, decodeTex_I8, TextureLUT
-} from "../Common/N64/Image.js"; import { GfxDevice } from
+    decodeTex_IA8, decodeTex_IA16, decodeTex_I4, decodeTex_I8, TextureLUT,
+} from "../Common/N64/Image"; import { GfxDevice } from
 "../gfx/platform/GfxPlatform";
 import type { Inflater }  from "./rom";
 import BitReader from "./bitreader";
@@ -19,6 +20,10 @@ export interface InflatedTexture {
     lutMode: TextureLUT;
     width: number;
     height: number;
+
+    compressionMethod: number;
+    hasLOD: boolean;
+    numLODs: number;
 
     addr: number; // original in-ROM texture data addr
     offset: number; // offset in the coalesced texture binary we output
@@ -99,23 +104,34 @@ function toGBILUTMode(format: Format): TextureLUT {
     ][format];
 }
 
+
+function has1BitAlpha(format:Format): boolean {
+    return !![
+        0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0,
+    ][format];
+}
+
 function numChannels(format: Format): number {
     return [
          4, 3, 3, 3, 2, 2, 1, 1, 1, 1, 1, 1, 1
     ][format];
 }
 
-enum CompressionMethod {
+export enum CompressionMethod {
     UNCOMPRESSED0      = 0,
     UNCOMPRESSED1      = 1,
-    HUFFMAN            = 2, // 6
-    HUFFMANPERHCHANNEL = 3, // 1
-    RLE                = 4, // 156
-    LOOKUP             = 5, // 5
-    HUFFMANLOOKUP      = 6, // 57
-    RLELOOKUP          = 7, // 134
-    HUFFMANBLUR        = 8, // 257 textures
+    HUFFMAN            = 2,  // 6
+    HUFFMANPERHCHANNEL = 3,  // 1
+    RLE                = 4,  // 156
+    LOOKUP             = 5,  // 5
+    HUFFMANLOOKUP      = 6,  // 57
+    RLELOOKUP          = 7,  // 134
+    HUFFMANBLUR        = 8,  // 257 textures
     RLEBLUR            = 9,
+
+    // Not a "real" value, we set this when isZlib is set to have something to
+    // show in the texture viewer.
+    ZLIB               = 10,
 }
 
 export interface TextureListEntry {
@@ -143,7 +159,7 @@ export interface TextureConfig {
 export const textureConfigStructSize = 12;
 export function textureConfigFromView(view: DataView, offset: number): TextureConfig {
     return {
-        ptr: view.getUint32(offset),
+        ptr:    view.getUint32(offset),
         width:  view.getUint8(offset + 4),
         height: view.getUint8(offset + 5),
         level:  view.getUint8(offset + 6),
@@ -167,12 +183,12 @@ export function inflateTexture(
 
     const view = data.createDataView();
     const header = view.getUint8(0);
-    const isZlib = !!((header & 0x40) >> 6);
-    const hasLod = !!((header & 0x80) >> 7);
-    const numLods = (header & 0x3f);
+    const isZlib = !!((header & 0x40) >>> 6);
+    texture.hasLOD = !!((header & 0x80) >>> 7);
+    texture.numLODs = (header & 0x3f);
 
     if (isZlib) {
-        return inflateZlibTexture(texture, data, hasLod, numLods, decompress);
+        return inflateZlibTexture(texture, data, decompress);
     }
 
     return [inflateNonZlibTexture(texture, data), null];
@@ -195,11 +211,16 @@ function inflateNonZlibTexture(
     texture.numColors = 0;
     texture.palOffset = -1;
     texture.palSize = -1;
-    const method: CompressionMethod = (header >> 8) & 0x0F;
+    texture.compressionMethod = (header >>> 8) & 0x0F;
 
-   switch (method) {
+   switch (texture.compressionMethod) {
        case CompressionMethod.RLE:
-           return inflateRLETexture(texture, data);
+           let [buf, reader] = inflateRLETexture(texture, data);
+           if (has1BitAlpha(texture.format)) {
+               buf = readAlphaBits(texture, buf, reader);
+           }
+
+           return unpackChannels(texture, buf);
    }
 
    /* DEBUG
@@ -214,7 +235,193 @@ function inflateNonZlibTexture(
    return data.subarray(0, 0); // DEBUG TODO
 }
 
-function inflateRLETexture(texture: InflatedTexture, data: ArrayBufferSlice): ArrayBufferSlice {
+// reader next readable bit should be the first bit of the alpha.
+function readAlphaBits(texture: InflatedTexture, data: ArrayBufferSlice, reader: BitReader): ArrayBufferSlice {
+    const area = texture.width * texture.height;
+    const out = new Uint8Array(data.byteLength + area);
+    out.set(data.createTypedArray(Uint8Array));
+
+    for (let i = 0; i < area; i++) {
+        out[data.byteLength + i] = reader.read(1);
+    }
+
+    return ArrayBufferSlice.fromView(out);
+}
+
+// Unpacks channels (RRRGGGBBB -> RGBRGBRGB) and realign bytes.
+// (realign() counterpart for non-zlib textures)
+function unpackChannels(texture: InflatedTexture, data: ArrayBufferSlice): ArrayBufferSlice {
+    switch(texture.format) {
+        case Format.I4: return unpackChannels_I4(texture, data);
+        case Format.IA4: return unpackChannels_IA4(texture, data);
+        case Format.I8: return unpackChannels_I8(texture, data);
+        case Format.IA8: return unpackChannels_IA8(texture, data);
+        case Format.RGB24: return unpackChannels_RGB24(texture, data);
+        case Format.RGBA16: return unpackChannels_RGBA16(texture, data);
+        case Format.RGBA32: return unpackChannels_RGBA32(texture, data);
+        default:
+            console.warn("unpackChannels: unhandled format:", Format[texture.format]);
+    }
+
+    return data;
+}
+
+function alignedTextureSize(texture: InflatedTexture): number {
+    const lineWidth = texture.width * numChannels(texture.format);
+    const missing = lineWidth % 8;
+    const alignedLineWidth = lineWidth + (8 - missing);
+
+    return texture.height * alignedLineWidth;
+}
+
+function unpackChannels_RGB24(texture: InflatedTexture, data: ArrayBufferSlice): ArrayBufferSlice {
+    const out = new Uint32Array(alignedTextureSize(texture));
+    const view = data.createDataView();
+    const area = texture.width * texture.height;
+
+    let offset = 0;
+    let dstOffset = 0;
+    for (let y = 0; y < texture.height; y++) {
+        for (let x = 0; x < texture.width; x++) {
+            out[dstOffset + x] = view.getUint8(offset) << 24 |
+                view.getUint8(offset + area) << 16 |
+                view.getUint8(offset + area * 2) << 8 |
+                0xFF
+            ;
+            offset++;
+        }
+        dstOffset += (texture.width + 3) & 0xffc;
+    }
+
+    return ArrayBufferSlice.fromView(out);
+}
+
+function unpackChannels_RGBA32(texture: InflatedTexture, data: ArrayBufferSlice): ArrayBufferSlice {
+    const out = new Uint32Array(alignedTextureSize(texture));
+    const view = data.createDataView();
+    const area = texture.width * texture.height;
+
+    let offset = 0;
+    let dstOffset = 0;
+    for (let y = 0; y < texture.height; y++) {
+        for (let x = 0; x < texture.width; x++) {
+            out[dstOffset + x] = view.getUint8(offset) << 24 |
+                view.getUint8(offset + area) << 16 |
+                view.getUint8(offset + area * 2) << 8 |
+                view.getUint8(offset + area * 3)
+            ;
+            offset++;
+        }
+        dstOffset += (texture.width + 3) & 0xffc;
+    }
+
+    return ArrayBufferSlice.fromView(out);
+}
+
+function unpackChannels_RGBA16(texture: InflatedTexture, data: ArrayBufferSlice): ArrayBufferSlice {
+    const out = new Uint16Array(alignedTextureSize(texture));
+    const view = data.createDataView();
+    const area = texture.width * texture.height;
+
+    let offset = 0;
+    let dstOffset = 0;
+
+    for (let y = 0; y < texture.height; y++) {
+        for (let x = 0; x < texture.width; x++) {
+            out[dstOffset + x] = view.getUint8(offset) << 11 |
+                view.getUint8(offset + area) << 6 |
+                view.getUint8(offset + area * 2) << 1 |
+                view.getUint8(offset + area * 3)
+             ;
+             offset++;
+        }
+
+        dstOffset += (texture.width + 3) & 0xffc;
+    }
+
+    return ArrayBufferSlice.fromView(out);
+}
+
+function unpackChannels_I8(texture: InflatedTexture, data: ArrayBufferSlice): ArrayBufferSlice {
+    // NOOP, there's no unaligned I8 texture found in ROM.
+    return data;
+}
+
+function unpackChannels_IA8(texture: InflatedTexture, data: ArrayBufferSlice): ArrayBufferSlice {
+    const out = new Uint8Array(alignedTextureSize(texture));
+    const view = data.createDataView();
+    const area = texture.width * texture.height;
+
+    let offset = 0;
+    let dstOffset = 0;
+
+    for (let y = 0; y < texture.height; y++) {
+        for (let x = 0; x < texture.width; x++) {
+            out[dstOffset + x] = view.getUint8(offset) << 4 | view.getUint8(offset + area);
+            offset++;
+        }
+
+        dstOffset += (texture.width + 7) & 0xff8;
+    }
+
+    return ArrayBufferSlice.fromView(out);
+}
+
+function unpackChannels_I4(texture: InflatedTexture, data: ArrayBufferSlice): ArrayBufferSlice {
+    const out = new Uint8Array(alignedTextureSize(texture));
+    const view = data.createDataView();
+    const area = texture.width * texture.height;
+
+    let offset = 0;
+    let dstOffset = 0;
+
+    for (let y = 0; y < texture.height; y++) {
+        for (let x = 0; x < texture.width; x+=2) {
+            out[dstOffset + (x >>> 1)] = view.getUint8(offset) << 4 | view.getUint8(offset + 1);
+            offset += 2;
+        }
+
+        if (!!(texture.width & 1)) {
+            offset--;
+        }
+
+        dstOffset += ((texture.width + 15) & 0xff0) >>> 1;
+    }
+
+    return ArrayBufferSlice.fromView(out);
+}
+
+function unpackChannels_IA4(texture: InflatedTexture, data: ArrayBufferSlice): ArrayBufferSlice {
+    const out = new Uint8Array(alignedTextureSize(texture));
+    const view = data.createDataView();
+    const area = texture.width * texture.height;
+
+    let offset = 0;
+    let dstOffset = 0;
+    for (let y = 0; y < texture.height; y++) {
+        for (let x = 0; x < texture.width; x+=2) {
+            out[dstOffset + (x >>> 1)] =
+                view.getUint8(offset) << 5 |
+                view.getUint8(offset + area * 3) << 4 |
+                view.getUint8(offset + 1) << 1 |
+                view.getUint8(offset + area * 3 + 1)
+            ;
+            offset += 2
+        }
+
+        if (!!(texture.width & 1)) {
+            offset--;
+        }
+
+        dstOffset += (texture.width + 15) & 0xff0;
+    }
+
+    assert(false, "maybe unused");
+    return ArrayBufferSlice.fromView(out);
+}
+
+
+function inflateRLETexture(texture: InflatedTexture, data: ArrayBufferSlice): [ArrayBufferSlice, BitReader] {
     const reader = new BitReader(data);
     reader.read(32); // skip both headers
 
@@ -256,15 +463,13 @@ function inflateRLETexture(texture: InflatedTexture, data: ArrayBufferSlice): Ar
         }
     }
 
-    return ArrayBufferSlice.fromView(dst);
+    return [ArrayBufferSlice.fromView(dst), reader];
 }
 
 // FIXME: Ignore LODs for now.
 function inflateZlibTexture(
     texture: InflatedTexture,
     data: ArrayBufferSlice,
-    hasLod: boolean,
-    numLods: number,
     decompress: Inflater,
 ): [ArrayBufferSlice, ArrayBufferSlice] {
     const view = data.createDataView();
@@ -275,6 +480,7 @@ function inflateZlibTexture(
     texture.imageSize = toGBISize(texture.format);
     texture.lutMode = toGBILUTMode(texture.format);
     texture.numColors = view.getUint8(offset++) + 1;
+    texture.compressionMethod = CompressionMethod.ZLIB;
 
     // Always 16 bits per color, either r5g5b5a1 or i8a8.
     const palette = new Uint8Array(texture.numColors * 2);

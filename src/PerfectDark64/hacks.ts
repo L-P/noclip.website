@@ -56,7 +56,7 @@ function updateChicagoHacks(currentRoom: number, pos: ReadonlyVec3, rooms: Map<n
 }
 
 function updateDDTowerHacks(currentRoom: number, pos: ReadonlyVec3, rooms: Map<number, SceneRoom>): void {
-    { // There one skybox for the ground floor, one for the others.
+    { // There's one skybox for the ground floor, one for the others.
         const threshold = -4200;
         const lower = [0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14];
         const upper = [0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c];
@@ -71,6 +71,34 @@ function updateDDTowerHacks(currentRoom: number, pos: ReadonlyVec3, rooms: Map<n
             rooms.get(v)!.setVisible(
                 intro.includes(currentRoom) || currentRoom === 0x00
             );
+        });
+    }
+
+    { // Entrypoint floor overlaps top of executive floor.
+        const entrypoint = [0x3f, 0x39, 0x45, 0x39, 0x44, 0x3c, 0x3d, 0x3e, 0x3b];
+        const executive = [0x63, 0x52, 0x53, 0x54];
+        const threshold = -922;
+
+        // Visible from the entire central shaft.
+        entrypoint.forEach(v => {
+            rooms.get(v)!.setVisible(pos[1] >= threshold || currentRoom === 0x00);
+        });
+
+        executive.forEach(v => {
+            rooms.get(v)!.setVisible(pos[1] < threshold || currentRoom === 0x00);
+        });
+    }
+
+    { // Stairs overlap with cheese room.
+        const stairs = [0x53, 0x4b, 0x4c, 0x4d, 0x4e, 0x4f, 0x50, 0x52, 0x56, 0x57, 0x67, 0x88];
+        const cheese = [0x43, 0x38, 0x3e];
+
+        stairs.forEach(v => {
+            rooms.get(v)!.setVisible(!cheese.includes(currentRoom));
+        });
+
+        cheese.forEach(v => {
+            rooms.get(v)!.setVisible(!stairs.includes(currentRoom));
         });
     }
 }

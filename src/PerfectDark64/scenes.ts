@@ -486,8 +486,11 @@ async function loadViewerTextures(sceneContext: SceneContext, device: GfxDevice)
             parseTLUT(lut, ArrayBufferSlice.fromView(palData).createDataView(), 0, texture.imageSize, texture.lutMode);
         }
 
-        const view = bin.subarray(texture.offset, texture.size).createDataView();
-        const decoded = tex.decodeTexture(texture, view, lut);
+        const preprocessed = tex.preprocessTexture(texture, bin.subarray(texture.offset, texture.size));
+        if (preprocessed === null) {
+            return {gfxTexture: null, extraInfo: null};
+        }
+        const decoded = tex.decodeTexture(texture, preprocessed.createDataView(), lut);
 
         const gfxTexture = device.createTexture(makeTextureDescriptor2D(
             GfxFormat.U8_RGBA_NORM,
@@ -509,7 +512,7 @@ async function loadViewerTextures(sceneContext: SceneContext, device: GfxDevice)
         }
 
         return { gfxTexture, extraInfo };
-    });
+    }).filter(v => v.gfxTexture !== null);
 
     return new tex.TextureListHolder(viewerTextures, meta);
 }

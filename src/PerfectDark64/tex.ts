@@ -178,6 +178,7 @@ export function inflateTexture(
     decompress: Inflater,
 ): [ArrayBufferSlice, ArrayBufferSlice|null] /* indices, palette */ {
     if (data.byteLength <= 0) {
+        console.warn(`cannot inflate texture ${hexzero0x(texture.index, 4)}: no data`);
         return [data, null];
     }
 
@@ -191,29 +192,28 @@ export function inflateTexture(
         return inflateZlibTexture(texture, data, decompress);
     }
 
-    return [inflateNonZlibTexture(texture, data), null];
-}
-
-function inflateNonZlibTexture(
-    texture: InflatedTexture,
-    data: ArrayBufferSlice,
-): ArrayBufferSlice {
-    const view = data.createDataView();
-    let offset = 1; // Skip header.
-    const header = view.getUint32(offset);
-
-    texture.format = header  >>> 28;
-    texture.width  = (header >>> 20) & 0xFF;
-    texture.height = (header >>> 12) & 0xFF;
+    const subheader = view.getUint32(1);
+    texture.format = subheader  >>> 28;
+    texture.width  = (subheader >>> 20) & 0xFF;
+    texture.height = (subheader >>> 12) & 0xFF;
     texture.imageFormat = toGBIFormat(texture.format);
     texture.imageSize = toGBISize(texture.format);
     texture.lutMode = toGBILUTMode(texture.format);
     texture.numColors = 0;
     texture.palOffset = -1;
     texture.palSize = -1;
-    texture.compressionMethod = (header >>> 8) & 0x0F;
+    texture.compressionMethod = (subheader >>> 8) & 0x0F;
 
+    return [data, null];
+}
+
+export function preprocessTexture(
+    texture: InflatedTexture,
+    data: ArrayBufferSlice,
+): null|ArrayBufferSlice {
    switch (texture.compressionMethod) {
+       case CompressionMethod.ZLIB:
+           return realignZlibTexture(texture, data);
        case CompressionMethod.RLE:
            let [buf, reader] = inflateRLETexture(texture, data);
            if (has1BitAlpha(texture.format)) {
@@ -223,16 +223,16 @@ function inflateNonZlibTexture(
            return unpackChannels(texture, buf);
    }
 
-   /* DEBUG
     console.warn(
+       hexzero0x(texture.index) +":",
        "unhandled compression method",
-       CompressionMethod[method],
-       Format[format],
-       width,
-       height,
-   ); // */
+       CompressionMethod[texture.compressionMethod],
+       Format[texture.format],
+       texture.width,
+       texture.height,
+   );
 
-   return data.subarray(0, 0); // DEBUG TODO
+   return null;
 }
 
 // reader next readable bit should be the first bit of the alpha.
@@ -491,7 +491,7 @@ function inflateZlibTexture(
     texture.width = view.getUint8(offset++);
     texture.height = view.getUint8(offset++);
 
-    const indices = realign(texture, decompress(data.subarray(offset)));
+    const indices = decompress(data.subarray(offset));
 
     return [indices, ArrayBufferSlice.fromView(palette)];
 }
@@ -510,7 +510,7 @@ function indicePerByte(format: Format): number {
 }
 
 // Textures must be aligned to 8 bytes per row but are stored without the padding.
-function realign(texture: InflatedTexture, data: ArrayBufferSlice): ArrayBufferSlice {
+function realignZlibTexture(texture: InflatedTexture, data: ArrayBufferSlice): ArrayBufferSlice {
     const ipb = indicePerByte(texture.format);
     const dst = new Uint8Array((texture.width * texture.height / ipb)|0);
     const view = data.createDataView();

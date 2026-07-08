@@ -26,14 +26,16 @@ function writeBGSegments(rom: ROM) {
     bgSegmentPaths.forEach((path) => {
         const seg = new BGSegment(rom.openFile(path), decompress);
         const outPath = [pathBaseOut, path, ".json"].join("");
-        writeFileSync(outPath, Buffer.from(JSON.stringify(seg)));
+        const buf = Buffer.from(JSON.stringify(seg));
+        writeFileSync(outPath, buf);
 
         console.info(
             `Wrote BG segment: ${outPath},`,
             `${seg.rooms.length} rooms,`,
             seg.rooms.reduce((acc, room) => acc + room.blocks.length, 0), "blocks,",
             seg.rooms.reduce((acc, room) => acc + room.vertices.length, 0), "vertices,",
-            seg.rooms.reduce((acc, room) => acc + room.colours.length, 0), "colours",
+            seg.rooms.reduce((acc, room) => acc + room.colours.length, 0), "colours,",
+            toMiB(buf.byteLength), "MiB",
         );
     });
 }
@@ -51,7 +53,6 @@ function writeTextureData(rom: ROM) {
     mkdirSync(outBase, {recursive: true});
 
     let inflatedSize = 0;
-    let compressedSize = 0;
     let meta: tex.InflatedTexture[] = [];
 
     // Arbitrary, must be able to contain all decompressed textures.
@@ -75,7 +76,6 @@ function writeTextureData(rom: ROM) {
             bigBin[texture.offset + i] = view.getUint8(i);
         }
 
-        compressedSize += data.byteLength;
         inflatedSize += decompressed.byteLength;
 
         if (palette === null) {
@@ -92,7 +92,6 @@ function writeTextureData(rom: ROM) {
             bigBin[texture.palOffset + i] = palView.getUint8(i);
         }
 
-        compressedSize += palette.byteLength;
         inflatedSize += palette.byteLength;
 
         meta.push(texture);
@@ -105,8 +104,7 @@ function writeTextureData(rom: ROM) {
     console.info(
         `Wrote texture data: ${outBase}*.bin,`,
         meta.length, "/", rom.textureData.length, "textures,",
-        toMiB(compressedSize), "MiB compressed,",
-        toMiB(bigBin.byteLength), "MiB uncompressed,",
+        toMiB(bigBin.byteLength), "MiB",
     );
 
     const metaPath = pathBaseOut + "textures.json";

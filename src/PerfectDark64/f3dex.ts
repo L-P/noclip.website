@@ -5,6 +5,7 @@ import {
     GfxFormat, GfxInputLayout, GfxTexture, GfxVertexBufferFrequency,
     GfxWrapMode,
 } from "../gfx/platform/GfxPlatform";
+import { AABB } from "../Geometry";
 import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { ImageFormat, ImageSize } from "../Common/N64/Image";
 import { ReadonlyVec3, vec4 } from "gl-matrix";
@@ -186,6 +187,10 @@ export class Mesh {
     public cullMode: GfxCullMode = GfxCullMode.None;
     public wrapS: GfxWrapMode = GfxWrapMode.Repeat;
     public wrapT: GfxWrapMode = GfxWrapMode.Repeat;
+    public aabb: AABB;
+
+    // Set by and for the renderer and the code around it, not the interpreter.
+    public sortKeyBase: number;
 
     // Returns true if the mesh has been successfuly built an can be rendered.
     public isValid(): boolean {
@@ -210,11 +215,11 @@ export class MeshBuilder {
     public geometryMode: GeometryMode = 0;
     public wrapS: GfxWrapMode;
     public wrapT: GfxWrapMode;
+    public aabb: AABB = new AABB();
 
     public vtxToIndex: Map<string, number> = new Map();
 
     public pushFace(verts: ComputedVertex[]): void {
-        // /*
         // Deduping indices, the ugly way.
         // The key makes me barf but it's 44k deduped indices across Area 51.
         verts.forEach(v => {
@@ -227,16 +232,9 @@ export class MeshBuilder {
                 this.vertices.push(v);
                 this.indices.push(index);
                 this.vtxToIndex.set(key, index);
+                this.aabb.unionPoint(toReadonlyVec3(v));
             }
         });
-        return;
-        // */
-
-        /* Without deduping indices.
-        const last = this.vertices.length;
-        this.vertices.push(...verts);
-        this.indices.push(...verts.map((_, i) => last+i));
-        */
     }
 
     public buildMesh(device: GfxDevice, cache: GfxRenderCache): Mesh {
@@ -251,6 +249,7 @@ export class MeshBuilder {
         mesh.cullMode = translateCullMode(this.geometryMode);
         mesh.wrapS = this.wrapS;
         mesh.wrapT = this.wrapT;
+        mesh.aabb = this.aabb;
 
         const vertexArray = new Float32Array(this.vertices.length * computedVertexElementsCount);
         this.vertices.forEach((v, i) => {

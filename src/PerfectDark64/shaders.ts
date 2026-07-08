@@ -14,6 +14,7 @@ export class Program extends DeviceProgram {
             Mat4x4 u_ClipFromWorld;
             Mat3x4 u_WorldFromLocal;
             float u_hasValidTexture;
+            float u_minAlpha;
         };
 
         uniform sampler2D u_Texture;
@@ -37,7 +38,7 @@ export class Program extends DeviceProgram {
                 col *= v_VertexColors.rgba;
             #endif
 
-            gl_FragColor = col;
+            gl_FragColor = vec4(col.rgb, max(col.a, u_minAlpha));
         }
     `;
 

@@ -14,7 +14,7 @@ import { computeViewMatrix, computeViewMatrixSkybox } from '../Camera.js';
 import { fillMatrix4x3, fillMatrix4x4, fillVec4 } from "../gfx/helpers/UniformBufferHelpers";
 import { hexzero0x } from "../util";
 import { makeBackbufferDescSimple, makeAttachmentClearDescriptor, opaqueBlackFullClearRenderPassDescriptor, standardFullClearRenderPassDescriptor } from '../gfx/helpers/RenderGraphHelpers.js';
-import { makeSortKey, GfxRendererLayer, GfxRenderInst, GfxRenderInstList } from "../gfx/render/GfxRenderInstManager";
+import { setSortKeyTranslucentDepth, setSortKeyDepth, makeSortKey, GfxRendererLayer, GfxRenderInst, GfxRenderInstList } from "../gfx/render/GfxRenderInstManager";
 import { vec3, mat4 } from "gl-matrix";
 import { setAttachmentStateSimple } from '../gfx/helpers/GfxMegaStateDescriptorHelpers';
 import { drawScreenSpaceText, drawWorldSpaceText, getDebugOverlayCanvas2D } from '../DebugJunk'
@@ -60,6 +60,7 @@ class Scene implements Viewer.SceneGfx {
 
     private renderInstListSky = new GfxRenderInstList();
     private renderInstListMain = new GfxRenderInstList();
+    private renderInstListXLU = new GfxRenderInstList();
     private gfxProgram: GfxProgram | null = null;
     private rooms: Map<number, SceneRoom>;
     private skyColor = standardFullClearRenderPassDescriptor;
@@ -103,6 +104,11 @@ class Scene implements Viewer.SceneGfx {
         var ret: Map<number, SceneRoom> = new Map();
 
         seg.rooms.forEach(room => {
+            const opaque = this.buildBlockTree(device, room, room.opaqueRoot);
+            opaque.forEach(v => v.sortKeyBase = makeSortKey(GfxRendererLayer.OPAQUE));
+            const translucent = this.buildBlockTree(device, room, room.translucentRoot);
+            translucent.forEach(v => v.sortKeyBase = makeSortKey(GfxRendererLayer.TRANSLUCENT));
+
             ret.set(room.number, new SceneRoom({
                 number: room.number,
                 pos: room.pos,
@@ -114,8 +120,8 @@ class Scene implements Viewer.SceneGfx {
                     room.bbox.max[1],
                     room.bbox.max[2],
                 ),
-                opaque: this.buildBlockTree(device, room, room.opaqueRoot),
-                translucent: this.buildBlockTree(device, room, room.translucentRoot),
+                opaque: opaque,
+                translucent: translucent,
             }));
         });
 
@@ -158,16 +164,10 @@ class Scene implements Viewer.SceneGfx {
         const mainDepthDesc = makeBackbufferDescSimple(GfxrAttachmentSlot.DepthStencil, viewerInput, opaqueBlackFullClearRenderPassDescriptor);
         const builder = this.renderHelper.renderGraph.newGraphBuilder();
 
-        const template = this.renderHelper.pushTemplateRenderInst();
-        template.setBindingLayouts([{
-            numSamplers: 1,
-            numUniformBuffers: 1,
-        }]);
-
         this.handleHacksAndRoomIDs(viewerInput);
 
-        this.renderSkybox(viewerInput, template);
-        this.renderSceneRooms(this.rooms, viewerInput, template);
+        this.renderSkybox(viewerInput);
+        this.renderSceneRooms(this.rooms, viewerInput);
 
         const mainColorTargetID = builder.createRenderTargetID(mainColorDesc, 'Main Color');
         const mainDepthTargetID = builder.createRenderTargetID(mainDepthDesc, 'Main Depth');
@@ -191,12 +191,20 @@ class Scene implements Viewer.SceneGfx {
             });
         });
 
-        this.renderHelper.renderInstManager.popTemplate();
+        builder.pushPass(pass => {
+            pass.setDebugName("Translucent");
+            pass.attachRenderTargetID(GfxrAttachmentSlot.Color0, mainColorTargetID);
+            pass.attachRenderTargetID(GfxrAttachmentSlot.DepthStencil, mainDepthTargetID);
+            pass.exec(passRenderer => {
+                this.renderInstListXLU.drawOnPassRenderer(this.renderHelper.renderCache, passRenderer);
+            });
+        });
 
         this.renderHelper.antialiasingSupport.pushPasses(builder, viewerInput, mainColorTargetID);
         builder.resolveRenderTargetToExternalTexture(mainColorTargetID, viewerInput.onscreenTexture);
         this.renderHelper.prepareToRender();
         builder.execute();
+        this.renderInstListXLU.reset();
         this.renderInstListMain.reset();
         this.renderInstListSky.reset();
     }
@@ -227,7 +235,7 @@ class Scene implements Viewer.SceneGfx {
         }
     }
 
-    private renderSkybox(viewerInput: Viewer.ViewerRenderInput, template: GfxRenderInst): void {
+    private renderSkybox(viewerInput: Viewer.ViewerRenderInput): void {
         if (!this.shouldRenderSkybox) {
             return
         }
@@ -244,14 +252,20 @@ class Scene implements Viewer.SceneGfx {
         skyRoom.opaque.forEach(v => v.isSkybox = true);
         skyRoom.translucent.forEach(v => v.isSkybox = true);
 
-        this.renderSceneRoom(skyRoom, viewerInput, template).forEach(inst => {
+        this.renderSceneRoom(skyRoom, viewerInput, true).forEach(inst => {
+            if (inst.getDrawCount() > 0) {
+                this.renderInstListSky.submitRenderInst(inst);
+            }
+        });
+
+        this.renderSceneRoom(skyRoom, viewerInput, false).forEach(inst => {
             if (inst.getDrawCount() > 0) {
                 this.renderInstListSky.submitRenderInst(inst);
             }
         });
     }
 
-    private renderSceneRooms(rooms: Map<number, SceneRoom>, viewerInput: Viewer.ViewerRenderInput , template: GfxRenderInst): void {
+    private renderSceneRooms(rooms: Map<number, SceneRoom>, viewerInput: Viewer.ViewerRenderInput): void {
         rooms.forEach(room => {
             if (room.number === this.stage.skyRoom) {
                 return;
@@ -276,28 +290,33 @@ class Scene implements Viewer.SceneGfx {
                 );
             }
 
-            this.renderSceneRoom(room, viewerInput, template).forEach(inst => {
+            this.renderSceneRoom(room, viewerInput, true).forEach(inst => {
                 // FIXME: Some rooms are empty. Maybe cull those before rendering.
                 if (inst.getDrawCount() > 0) {
                     this.renderInstListMain.submitRenderInst(inst);
                 }
             });
+
+            this.renderSceneRoom(room, viewerInput, false).forEach(inst => {
+                // FIXME: Some rooms are empty. Maybe cull those before rendering.
+                if (inst.getDrawCount() > 0) {
+                    this.renderInstListXLU.submitRenderInst(inst);
+                }
+            });
         });
     }
 
-    private renderSceneRoom(room: SceneRoom, viewerInput: Viewer.ViewerRenderInput , template: GfxRenderInst): GfxRenderInst[] {
+    private renderSceneRoom(room: SceneRoom, viewerInput: Viewer.ViewerRenderInput , opaque: boolean): GfxRenderInst[] {
         var ret: GfxRenderInst[] = [];
 
-        if (this.shouldRenderOpaque) {
-            template.sortKey = makeSortKey(GfxRendererLayer.OPAQUE);
+        if (opaque && this.shouldRenderOpaque) {
             room.opaque.forEach(mesh => {
-                ret.push(this.renderMesh(mesh, room.pos, viewerInput, template));
+                ret.push(this.renderMesh(mesh, room.pos, viewerInput, opaque));
             });
         }
-        if (this.shouldRenderTranslucent) {
-            template.sortKey = makeSortKey(GfxRendererLayer.TRANSLUCENT);
+        if (!opaque && this.shouldRenderTranslucent) {
             room.translucent.forEach(mesh => {
-                ret.push(this.renderMesh(mesh, room.pos, viewerInput, template));
+                ret.push(this.renderMesh(mesh, room.pos, viewerInput, opaque));
             });
         }
 
@@ -308,8 +327,14 @@ class Scene implements Viewer.SceneGfx {
         mesh: Mesh,
         pos:Vertex,
         viewerInput: Viewer.ViewerRenderInput,
-        template: GfxRenderInst,
+        opaque: boolean,
     ): GfxRenderInst {
+        const template = this.renderHelper.pushTemplateRenderInst();
+        template.setBindingLayouts([{
+            numSamplers: 1,
+            numUniformBuffers: 1,
+        }]);
+
         const data = template.allocateUniformBufferF32(Program.ub_SceneParams, (4*4) + (3*4) + 4);
         let offs = 0;
 
@@ -326,8 +351,8 @@ class Scene implements Viewer.SceneGfx {
         mat4.translate(mat, mat, [pos.x, pos.y, pos.z]);
         offs += fillMatrix4x3(data, offs, mat);
 
-        data[offs] = +(mesh.texture !== null);
-        offs++;
+        data[offs++] = +(mesh.texture !== null);
+        data[offs++] = opaque ? 1.0 : 0.0;
 
         if (this.gfxProgram === null) {
             this.gfxProgram = this.renderHelper.renderCache.createProgram(this.createProgram());
@@ -359,6 +384,19 @@ class Scene implements Viewer.SceneGfx {
         let megaStateFlags: Partial<GfxMegaStateDescriptor> = {
             cullMode: mesh.cullMode,
         };
+        megaStateFlags.depthWrite = opaque;
+
+        const camPos = vec3.create();
+        mat4.getTranslation(camPos, viewerInput.camera.worldMatrix);
+
+        const centerPoint = vec3.create();
+        mesh.aabb.centerPoint(centerPoint);
+        vec3.add(centerPoint, centerPoint, toReadonlyVec3(pos));
+
+        template.sortKey = setSortKeyDepth(
+            mesh.sortKeyBase,
+            vec3.distance(camPos, centerPoint),
+        );
 
         setAttachmentStateSimple(megaStateFlags, {
             blendMode: GfxBlendMode.Add,
@@ -366,6 +404,8 @@ class Scene implements Viewer.SceneGfx {
             blendDstFactor: GfxBlendFactor.OneMinusSrcAlpha,
         });
         renderInst.setMegaStateFlags(megaStateFlags);
+
+        this.renderHelper.renderInstManager.popTemplate();
 
         return renderInst;
     }

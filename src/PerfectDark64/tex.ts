@@ -255,7 +255,7 @@ export function preprocessTexture(
        }
    }
 
-    // /*
+    /*
      console.warn(
        hexzero0x(texture.index, 4) +":",
        "unhandled compression method:",

@@ -2,7 +2,6 @@ import * as UI from "../ui";
 import * as Viewer from "../viewer";
 import ArrayBufferSlice from "../ArrayBufferSlice";
 import { assert, hexzero0x, spliceBisectRight } from "../util";
-import { texturePadWidth } from "../Common/N64/RDP";
 import {
     ImageFormat, ImageSize, decodeTex_RGB24, decodeTex_RGBA16,
     decodeTex_RGBA32, decodeTex_CI4, decodeTex_CI8, decodeTex_IA4,
@@ -104,6 +103,13 @@ function toGBILUTMode(format: Format): TextureLUT {
     ][format];
 }
 
+// > For non-paletted images, size in decimal of each colour channel.
+// > Eg. 32 means each channel can store up to 32 values (5-bits per channel).
+// > For paletted images, same thing but for the palette indices instead.
+// - pd64 decomp
+function toChannelSize(format: Format): number {
+    return [256, 32, 256, 32, 256, 16, 8, 256, 16, 256, 16, 256, 16][format];
+}
 
 function has1BitAlpha(format:Format): boolean {
     return !![
@@ -178,7 +184,7 @@ export function inflateTexture(
     decompress: Inflater,
 ): [ArrayBufferSlice, ArrayBufferSlice|null] /* indices, palette */ {
     if (data.byteLength <= 0) {
-        console.warn(`cannot inflate texture ${hexzero0x(texture.index, 4)}: no data`);
+        console.warn(hexzero0x(texture.index, 4) +":", "cannot inflate texture: no data");
         return [data, null];
     }
 
@@ -207,6 +213,7 @@ export function inflateTexture(
     return [data, null];
 }
 
+// Decompress, unpack, and realign textures to 8 bytes.
 export function preprocessTexture(
     texture: InflatedTexture,
     data: ArrayBufferSlice,
@@ -214,25 +221,231 @@ export function preprocessTexture(
    switch (texture.compressionMethod) {
        case CompressionMethod.ZLIB:
            return realignZlibTexture(texture, data);
-       case CompressionMethod.RLE:
+       case CompressionMethod.HUFFMAN: {
+           const reader = new BitReader(data);
+           reader.read(32); // skip two headers
+           let buf = inflateHuffmanTexture(texture, data, reader);
+
+           if (has1BitAlpha(texture.format)) {
+               buf = readAlphaBits(texture, buf, reader);
+           }
+
+           return unpackChannels(texture, buf);
+       }
+       case CompressionMethod.HUFFMANBLUR: {
+           const reader = new BitReader(data);
+           reader.read(32); // skip two headers
+           const blurMethod = reader.read(3);
+           let buf = inflateHuffmanTexture(texture, data, reader);
+           buf = blurTexture(texture, buf, blurMethod);
+
+           if (has1BitAlpha(texture.format)) {
+               buf = readAlphaBits(texture, buf, reader);
+           }
+
+           return unpackChannels(texture, buf);
+       }
+       case CompressionMethod.RLE: {
            let [buf, reader] = inflateRLETexture(texture, data);
            if (has1BitAlpha(texture.format)) {
                buf = readAlphaBits(texture, buf, reader);
            }
 
            return unpackChannels(texture, buf);
+       }
    }
 
-    console.warn(
-       hexzero0x(texture.index) +":",
-       "unhandled compression method",
-       CompressionMethod[texture.compressionMethod],
-       Format[texture.format],
-       texture.width,
-       texture.height,
+    // /*
+     console.warn(
+       hexzero0x(texture.index, 4) +":",
+       "unhandled compression method:",
+       CompressionMethod[texture.compressionMethod]
    );
-
+   // */
    return null;
+}
+
+function blurTexture(texture: InflatedTexture, data: ArrayBufferSlice, method: number): ArrayBufferSlice {
+    const chanSize = toChannelSize(texture.format);
+    const buf = data.createTypedArray(Uint8Array);
+    const height = numChannels(texture.format)*texture.height;
+
+    for (let y = 0; y < height; y++) {
+        for (let x = 0; x < texture.width; x++) {
+            const cur = buf[y * texture.width + x] + chanSize * 2;
+            const left = x > 0 ? buf[y * texture.width + x - 1] : 0;
+            const above = y > 0 ? buf[(y - 1) * texture.width + x] : 0;
+            const aboveLeft = x > 0 && y > 0 ? buf[(y - 1) * texture.width + x - 1] : 0;
+
+            const offset = y * texture.width + x;
+
+            switch (method) {
+                case 0:
+                    buf[offset] = (cur + left) % chanSize;
+                    break;
+                case 1:
+                    buf[offset] = (cur + above) % chanSize;
+                    break;
+                case 2:
+                    buf[offset] = (cur + aboveLeft) % chanSize;
+                    break;
+                case 3:
+                    buf[offset] = (cur + (left + above - aboveLeft)) % chanSize;
+                    break;
+                case 4:
+                    buf[offset] = (cur + ((above - aboveLeft) / 2 + left)) % chanSize;
+                    break;
+                case 5:
+                    buf[offset] = (cur + ((left - aboveLeft) / 2 + above)) % chanSize;
+                    break;
+                case 6:
+                    buf[offset] = (cur + ((left + above) / 2)) % chanSize;
+                    break;
+                default:
+                    console.warn(
+                        hexzero0x(texture.index, 4) +":",
+                        "unhandled blur method:", method,
+                    );
+            }
+        }
+    }
+
+    return ArrayBufferSlice.fromView(buf);
+}
+
+// This mess is a straight port from the decomp, warts and all.
+// It could be refactored but there's I'd like to write tests before.
+function inflateHuffmanTexture(texture: InflatedTexture, data: ArrayBufferSlice, reader: BitReader): ArrayBufferSlice {
+    const numIterations = texture.width * texture.height * numChannels(texture.format);
+    const chanSize = toChannelSize(texture.format);
+    const out = new Uint8Array(0x2000);
+
+    const frequencies: Array<number> = new Array(2048); // u16
+    const nodes: Array<[number, number]> = new Array(2048); // [s16, s16]
+    for (let i = 0; i < nodes.length; i++) {
+        nodes[i] = [-1, -1];
+    }
+
+    for (let i = 0; i < chanSize; i++) {
+        frequencies[i] = reader.read(8);
+    }
+
+    let minFreqA = 9999;
+    let minFreqB = 9999;
+    let minIndexA: number = NaN;
+    let minIndexB: number = NaN;
+	for (let i = 0; i < chanSize; i++) {
+		if (frequencies[i] < minFreqA) {
+			if (minFreqB < minFreqA) {
+				minFreqA = frequencies[i];
+				minIndexA = i;
+			} else {
+				minFreqB = frequencies[i];
+				minIndexB = i;
+			}
+		} else if (frequencies[i] < minFreqB) {
+			minFreqB = frequencies[i];
+			minIndexB = i;
+		}
+	}
+    assert(!isNaN(minIndexA) && !isNaN(minIndexB), "minIndex{A,B} should have been set");
+
+    let rootIndex = -1;
+    let done = false;
+    while (!done) {
+        let sum = frequencies[minIndexA] + frequencies[minIndexB];
+        if (sum === 0) {
+            sum = 1;
+        }
+
+        frequencies[minIndexA] = 9999;
+        frequencies[minIndexB] = 9999;
+
+        if (nodes[minIndexA][0] < 0 && nodes[minIndexA][1] < 0) {
+            nodes[minIndexA][0] = minIndexA + 10000;
+            rootIndex = minIndexA;
+            frequencies[minIndexA] = sum;
+
+            if (nodes[minIndexB][0] < 0 && nodes[minIndexB][1] < 0) {
+                nodes[minIndexA][1] = minIndexB + 10000;
+            } else {
+                nodes[minIndexA][1] = minIndexB;
+            }
+        } else if (nodes[minIndexB][0] < 0 && nodes[minIndexB][1] < 0) {
+            nodes[minIndexB][0] = minIndexB + 10000;
+            rootIndex = minIndexB;
+            frequencies[minIndexB] = sum;
+
+            if (nodes[minIndexA][0] < 0 && nodes[minIndexA][1] < 0) {
+                nodes[minIndexB][1] = minIndexA + 10000;
+            } else {
+                nodes[minIndexB][1] = minIndexA;
+            }
+        } else {
+            for (
+                rootIndex = 0;
+                nodes[rootIndex][0] >= 0 ||
+                nodes[rootIndex][1] >= 0 ||
+                frequencies[rootIndex] < 9999;
+                rootIndex++
+            ) {
+                if (rootIndex >= nodes.length - 1) {
+                    break;
+                }
+            }
+
+            frequencies[rootIndex] = sum;
+            nodes[rootIndex][0] = minIndexA;
+            nodes[rootIndex][1] = minIndexB;
+        }
+
+        // Find the two smallest frequencies again for the next iteration
+        minFreqA = 9999;
+        minFreqB = 9999;
+
+        for (let i = 0; i < chanSize; i++) {
+            if (frequencies[i] < minFreqA) {
+                if (minFreqA > minFreqB) {
+                    minFreqA = frequencies[i];
+                    minIndexA = i;
+                } else {
+                    minFreqB = frequencies[i];
+                    minIndexB = i;
+                }
+            } else if (frequencies[i] < minFreqB) {
+                minFreqB = frequencies[i];
+                minIndexB = i;
+            }
+        }
+
+        if (minFreqA === 9999 || minFreqB === 9999) {
+            done = true;
+        }
+    }
+
+    for (let i = 0; i < numIterations; i++) {
+        let indexOrValue = rootIndex;
+
+        while (indexOrValue < 10000) {
+            indexOrValue = nodes[indexOrValue][reader.read(1)];
+        }
+
+        if (chanSize <= 256) {
+            out[i] = indexOrValue - 10000;
+        } else {
+            assert(false, "unhandled");
+        }
+    }
+
+    // Alpha is discarded and read back later.
+    if (has1BitAlpha(texture.format)) {
+        return ArrayBufferSlice.fromView(out).subarray(0, texture.width * texture.height * 3);
+    }
+
+    // In this case the entire scratch buffer is spat out, if I attempt to
+    // resize it to match the texture dimensions there's an out of bound read down the line.
+    // FIXME: Either understand and document, or fix.
+    return ArrayBufferSlice.fromView(out);
 }
 
 // reader next readable bit should be the first bit of the alpha.
@@ -260,7 +473,10 @@ function unpackChannels(texture: InflatedTexture, data: ArrayBufferSlice): Array
         case Format.RGBA16: return unpackChannels_RGBA16(texture, data);
         case Format.RGBA32: return unpackChannels_RGBA32(texture, data);
         default:
-            console.warn("unpackChannels: unhandled format:", Format[texture.format]);
+            console.warn(
+                hexzero0x(texture.index, 4) +":",
+                "unpackChannels: unhandled format:", Format[texture.format],
+            );
     }
 
     return data;
@@ -564,7 +780,7 @@ export function decodeTexture(texture: InflatedTexture, view: DataView, lut: Uin
         decodeTex_IA4(dst, view, 0, texture.width, texture.height);
         break;
     default:
-        console.warn("unhandled:", Format[texture.format])
+        console.warn(hexzero0x(texture.index, 4) +":", "decodeTexture: unhandled format:", Format[texture.format]);
         break;
     }
 

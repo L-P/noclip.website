@@ -114,7 +114,6 @@ export function decodeTex_RGBA16(dst: Uint8Array, view: DataView, srcOffs: numbe
 
 export function decodeTex_RGBA32(dst: Uint8Array, view: DataView, srcIdx: number, tileW: number, tileH: number): void {
     let dstIdx = 0;
-    const padW = 0;
     for (let y = 0; y < tileH; y++) {
         for (let x = 0; x < tileW; x++) {
             const p = view.getUint32(srcIdx);
@@ -125,13 +124,11 @@ export function decodeTex_RGBA32(dst: Uint8Array, view: DataView, srcIdx: number
             srcIdx += 0x04;
             dstIdx += 0x04;
         }
-        srcIdx += padW;
     }
 }
 
 export function decodeTex_RGB24(dst: Uint8Array, view: DataView, srcIdx: number, tileW: number, tileH: number): void {
     let dstIdx = 0;
-    const padW = 0;
     for (let y = 0; y < tileH; y++) {
         for (let x = 0; x < tileW; x++) {
             dst[dstIdx + 0] = view.getUint8(srcIdx);
@@ -141,7 +138,6 @@ export function decodeTex_RGB24(dst: Uint8Array, view: DataView, srcIdx: number,
             srcIdx += 0x03;
             dstIdx += 0x04;
         }
-        srcIdx += padW;
     }
 }
 

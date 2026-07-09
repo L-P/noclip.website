@@ -2,12 +2,15 @@ import * as UI from "../ui";
 import * as Viewer from "../viewer";
 import ArrayBufferSlice from "../ArrayBufferSlice";
 import { assert, hexzero0x, spliceBisectRight } from "../util";
+import { Endianness } from "../endian";
 import {
     ImageFormat, ImageSize, decodeTex_RGB24, decodeTex_RGBA16,
     decodeTex_RGBA32, decodeTex_CI4, decodeTex_CI8, decodeTex_IA4,
     decodeTex_IA8, decodeTex_IA16, decodeTex_I4, decodeTex_I8, TextureLUT,
 } from "../Common/N64/Image"; import { GfxDevice } from
 "../gfx/platform/GfxPlatform";
+
+import { hexdump }  from "../DebugJunk";
 import type { Inflater }  from "./rom";
 import BitReader from "./bitreader";
 
@@ -118,21 +121,36 @@ function has1BitAlpha(format:Format): boolean {
 }
 
 function numChannels(format: Format): number {
-    return [
-         4, 3, 3, 3, 2, 2, 1, 1, 1, 1, 1, 1, 1
-    ][format];
+    return [4, 3, 3, 3, 2, 2, 1, 1, 1, 1, 1, 1, 1][format];
+}
+
+function bitsPerPixel(format: Format): number {
+    return [32, 16, 24, 15, 16, 8, 4, 8, 4, 16, 16, 16, 16][format];
+}
+
+function indicePerByte(format: Format): number {
+    switch(format) {
+        case Format.RGBA16_CI8:
+        case Format.IA16_CI8:
+            return 1;
+        case Format.RGBA16_CI4:
+        case Format.IA16_CI4:
+            return 2;
+        default:
+            assert(false, "unreachable");
+    }
 }
 
 export enum CompressionMethod {
     UNCOMPRESSED0      = 0,
     UNCOMPRESSED1      = 1,
-    HUFFMAN            = 2,  // 6
-    HUFFMANPERHCHANNEL = 3,  // 1
-    RLE                = 4,  // 156
-    LOOKUP             = 5,  // 5
-    HUFFMANLOOKUP      = 6,  // 57
-    RLELOOKUP          = 7,  // 134
-    HUFFMANBLUR        = 8,  // 257 textures
+    HUFFMAN            = 2,
+    HUFFMANPERHCHANNEL = 3,  // 1 texture left
+    RLE                = 4,
+    LOOKUP             = 5,
+    HUFFMANLOOKUP      = 6,
+    RLELOOKUP          = 7,
+    HUFFMANBLUR        = 8,
     RLEBLUR            = 9,
 
     // Not a "real" value, we set this when isZlib is set to have something to
@@ -218,51 +236,111 @@ export function preprocessTexture(
     texture: InflatedTexture,
     data: ArrayBufferSlice,
 ): null|ArrayBufferSlice {
-   switch (texture.compressionMethod) {
-       case CompressionMethod.ZLIB:
-           return realignZlibTexture(texture, data);
-       case CompressionMethod.HUFFMAN: {
-           const reader = new BitReader(data);
-           reader.read(32); // skip two headers
-           let buf = inflateHuffmanTexture(texture, data, reader);
+    switch (texture.compressionMethod) {
+        case CompressionMethod.ZLIB:
+            return realignZlibTexture(texture, data);
 
-           if (has1BitAlpha(texture.format)) {
-               buf = readAlphaBits(texture, buf, reader);
-           }
+        case CompressionMethod.HUFFMAN: {
+            const reader = new BitReader(data);
+            reader.read(32); // skip two headers
+            let buf = inflateHuffmanTexture(texture, data, reader);
 
-           return unpackChannels(texture, buf);
-       }
-       case CompressionMethod.HUFFMANBLUR: {
-           const reader = new BitReader(data);
-           reader.read(32); // skip two headers
-           const blurMethod = reader.read(3);
-           let buf = inflateHuffmanTexture(texture, data, reader);
-           buf = blurTexture(texture, buf, blurMethod);
+            if (has1BitAlpha(texture.format)) {
+                buf = readAlphaBits(texture, buf, reader);
+            }
 
-           if (has1BitAlpha(texture.format)) {
-               buf = readAlphaBits(texture, buf, reader);
-           }
+            return unpackChannels(texture, buf);
+        }
 
-           return unpackChannels(texture, buf);
-       }
-       case CompressionMethod.RLE: {
-           let [buf, reader] = inflateRLETexture(texture, data);
-           if (has1BitAlpha(texture.format)) {
-               buf = readAlphaBits(texture, buf, reader);
-           }
+        case CompressionMethod.HUFFMANBLUR: {
+            const reader = new BitReader(data);
+            reader.read(32); // skip two headers
+            const blurMethod = reader.read(3);
+            let buf = inflateHuffmanTexture(texture, data, reader);
+            buf = blurTexture(texture, buf, blurMethod);
 
-           return unpackChannels(texture, buf);
-       }
-   }
+            if (has1BitAlpha(texture.format)) {
+                buf = readAlphaBits(texture, buf, reader);
+            }
 
-    /*
-     console.warn(
-       hexzero0x(texture.index, 4) +":",
-       "unhandled compression method:",
-       CompressionMethod[texture.compressionMethod]
-   );
-   // */
-   return null;
+            return unpackChannels(texture, buf);
+        }
+
+        case CompressionMethod.RLE: {
+            const reader = new BitReader(data);
+            reader.read(32); // skip two headers
+            const blocksTotal = texture.width * texture.height * numChannels(texture.format);
+            let buf = inflateRLETexture(texture, data, reader, blocksTotal);
+            if (has1BitAlpha(texture.format)) {
+                buf = readAlphaBits(texture, buf, reader);
+            }
+
+            return unpackChannels(texture, buf);
+        }
+
+        case CompressionMethod.LOOKUP: {
+            const reader = new BitReader(data);
+            reader.read(32); // skip two headers
+            const numColors = reader.read(11);
+            const lookup = buildLookupTable(texture, reader, numColors);
+            return inflateLookup(texture, data, lookup, numColors);
+        }
+
+        case CompressionMethod.HUFFMANLOOKUP: {
+            const reader = new BitReader(data);
+            reader.read(32); // skip two headers
+            const numColors = reader.read(11);
+            const lookup = buildLookupTable(texture, reader, numColors);
+            const buf = inflateHuffmanTexture(texture, data, reader);
+            return inflateLookup(texture, buf, lookup, numColors);
+        }
+
+        case CompressionMethod.RLELOOKUP: {
+            const reader = new BitReader(data);
+            reader.read(32); // skip two headers
+
+            const numColors = reader.read(11);
+            const lookup = buildLookupTable(texture, reader, numColors);
+
+            const blocksTotal = texture.width * texture.height;
+            let buf = inflateRLETexture(texture, data, reader, blocksTotal);
+
+            return inflateLookup(texture, buf, lookup, numColors);
+        }
+    }
+
+    console.warn(
+        "texture:", hexzero0x(texture.index, 4) +":",
+        "unhandled compression method:",
+        CompressionMethod[texture.compressionMethod]
+    );
+    return null;
+}
+
+function buildLookupTable(texture: InflatedTexture, reader: BitReader, numColors: number): ArrayBufferSlice {
+    const bpp = bitsPerPixel(texture.format);
+
+    if (bpp <= 16) {
+        const buf = new Uint16Array(numColors);
+        for (let i = 0; i < numColors; i++) {
+            buf[i] = reader.read(bpp);
+        }
+        return ArrayBufferSlice.fromView(buf);
+    } else if (bpp <= 24) {
+        const buf = new Uint32Array(numColors);
+        for (let i = 0; i < numColors; i++) {
+            buf[i] = reader.read(bpp);
+        }
+        return ArrayBufferSlice.fromView(buf);
+    } else {
+        const buf = new Uint32Array(numColors);
+        for (let i = 0; i < numColors; i++) {
+            buf[i] = reader.read(24) << 8 | reader.read(bpp - 24);
+        }
+        return ArrayBufferSlice.fromView(buf);
+    }
+
+    assert(false, "unreachable");
 }
 
 function blurTexture(texture: InflatedTexture, data: ArrayBufferSlice, method: number): ArrayBufferSlice {
@@ -469,6 +547,7 @@ function unpackChannels(texture: InflatedTexture, data: ArrayBufferSlice): Array
         case Format.IA4: return unpackChannels_IA4(texture, data);
         case Format.I8: return unpackChannels_I8(texture, data);
         case Format.IA8: return unpackChannels_IA8(texture, data);
+        case Format.RGB15: return unpackChannels_RGB15(texture, data);
         case Format.RGB24: return unpackChannels_RGB24(texture, data);
         case Format.RGBA16: return unpackChannels_RGBA16(texture, data);
         case Format.RGBA32: return unpackChannels_RGBA32(texture, data);
@@ -488,6 +567,24 @@ function alignedTextureSize(texture: InflatedTexture): number {
     const alignedLineWidth = lineWidth + (8 - missing);
 
     return texture.height * alignedLineWidth;
+}
+
+// Expanded to r5g5b5a1 RGBA16.
+function unpackChannels_RGB15(texture: InflatedTexture, data: ArrayBufferSlice): ArrayBufferSlice {
+    const out = new Uint16Array(alignedTextureSize(texture));
+    const view = data.createDataView();
+    const area = texture.width * texture.height;
+
+    let dstOffset = 0;
+    const reader = new BitReader(data);
+    for (let y = 0; y < texture.height; y++) {
+        for (let x = 0; x < texture.width; x++) {
+            out[dstOffset + x] = reader.read(15) << 1 | 1;
+        }
+        dstOffset += (texture.width + 3) & 0xffc;
+    }
+
+    return ArrayBufferSlice.fromView(out);
 }
 
 function unpackChannels_RGB24(texture: InflatedTexture, data: ArrayBufferSlice): ArrayBufferSlice {
@@ -637,10 +734,12 @@ function unpackChannels_IA4(texture: InflatedTexture, data: ArrayBufferSlice): A
 }
 
 
-function inflateRLETexture(texture: InflatedTexture, data: ArrayBufferSlice): [ArrayBufferSlice, BitReader] {
-    const reader = new BitReader(data);
-    reader.read(32); // skip both headers
-
+function inflateRLETexture(
+    texture: InflatedTexture,
+    data: ArrayBufferSlice,
+    reader: BitReader,
+    blocksTotal: number,
+): ArrayBufferSlice {
     const btFieldSize = reader.read(3);
     const rlFieldSize = reader.read(3);
     const blockSize = reader.read(4);
@@ -652,14 +751,11 @@ function inflateRLETexture(texture: InflatedTexture, data: ArrayBufferSlice): [A
     }
 
     let blocksDone = 0;
-    const blocksTotal = texture.width * texture.height * numChannels(texture.format);
-    const dst = new Uint8Array(blocksTotal);
-
-    if (blockSize > 8) {
-        // Technically handled by the game but I found no texture with that
-        // block size and it'd be too much of a hassle to handle.
-        throw Error("unhandled block size: " + blockSize);
-    }
+    let dst: Uint8Array|Uint16Array =
+        (blockSize <= 8) ?
+        new Uint8Array(blocksTotal) :
+        new Uint16Array(blocksTotal)
+    ;
 
     while (blocksDone < blocksTotal) {
         if (reader.read(1) === 0) {
@@ -670,16 +766,14 @@ function inflateRLETexture(texture: InflatedTexture, data: ArrayBufferSlice): [A
         const startBlockIndex = blocksDone - reader.read(btFieldSize) - 1;
         const runNumBlocks = reader.read(rlFieldSize) + fudge;
 
-        if (blockSize <= 8) {
-            for (let i = startBlockIndex; i < startBlockIndex + runNumBlocks; i++) {
-                dst[blocksDone++] = dst[i];
-            }
-
-            dst[blocksDone++] = reader.read(blockSize);
+        for (let i = startBlockIndex; i < startBlockIndex + runNumBlocks; i++) {
+            dst[blocksDone++] = dst[i];
         }
+
+        dst[blocksDone++] = reader.read(blockSize);
     }
 
-    return [ArrayBufferSlice.fromView(dst), reader];
+    return ArrayBufferSlice.fromView(dst);
 }
 
 // FIXME: Ignore LODs for now.
@@ -712,17 +806,192 @@ function inflateZlibTexture(
     return [indices, ArrayBufferSlice.fromView(palette)];
 }
 
-function indicePerByte(format: Format): number {
-    switch(format) {
-        case Format.RGBA16_CI8:
-        case Format.IA16_CI8:
-            return 1;
-        case Format.RGBA16_CI4:
-        case Format.IA16_CI4:
-            return 2;
+function inflateLookup(
+    texture: InflatedTexture,
+    src: ArrayBufferSlice,
+    lookup: ArrayBufferSlice,
+    numColors: number,
+): null|ArrayBufferSlice {
+    switch (texture.format) {
+        case Format.IA4:
+        case Format.I4: return inflateLookup_I4(texture, src, lookup, numColors);
+        case Format.I8:
+        case Format.IA8: return inflateLookup_I8(texture, src, lookup, numColors);
+        case Format.IA16:
+        case Format.RGB24: return inflateLookup_RGB24(texture, src, lookup, numColors);
+        case Format.RGB15: return inflateLookup_RGBA16(texture, src, lookup, numColors, isRGB15);
+        case Format.RGBA16: return inflateLookup_RGBA16(texture, src, lookup, numColors);
+        case Format.RGBA32: return inflateLookup_RGBA32(texture, src, lookup, numColors);
         default:
-            assert(false, "unreachable");
+            console.warn(
+                "texture:", hexzero0x(texture.index, 4),
+                "inflateLookup: unhandled format:", Format[texture.format],
+            );
+            return null;
     }
+
+    assert(false, "unreachable");
+}
+
+function inflateLookup_RGB24(
+    texture: InflatedTexture,
+    src: ArrayBufferSlice,
+    lookup: ArrayBufferSlice,
+    numColors: number,
+): ArrayBufferSlice {
+    const buf = new Uint32Array(alignedTextureSize(texture));
+    const lookup16 = lookup.convertFromEndianness(Endianness.BIG_ENDIAN, 2).createTypedArray(Uint16Array);
+    const lookup32 = lookup.convertFromEndianness(Endianness.BIG_ENDIAN, 4).createTypedArray(Uint32Array);
+    const src8 = src.createTypedArray(Uint8Array);
+    const src16 = src.createTypedArray(Uint16Array);
+
+    let dstOffset = 0;
+    let srcOffset = 0;
+    for (let y = 0; y < texture.height; y++) {
+        for (let x = 0; x < texture.width; x++) {
+            if (numColors <= 256) {
+                buf[dstOffset + x] = (lookup32[src8[srcOffset + x]] << 8) | 0xff;
+            } else {
+                const offset = src16[srcOffset + x];
+                buf[dstOffset + x] = (lookup16[offset] << 8) | 0xff;
+                assert(false, "unused");
+            }
+        }
+
+        dstOffset += (texture.width + 3) & 0xffc;
+        srcOffset += texture.width;
+    }
+
+    return ArrayBufferSlice.fromView(buf);
+}
+
+function inflateLookup_RGBA32(
+    texture: InflatedTexture,
+    src: ArrayBufferSlice,
+    lookup: ArrayBufferSlice,
+    numColors: number,
+): ArrayBufferSlice {
+    const buf = new Uint32Array(alignedTextureSize(texture));
+    const lookup16 = lookup.convertFromEndianness(Endianness.BIG_ENDIAN, 2).createTypedArray(Uint16Array);
+    const lookup32 = lookup.convertFromEndianness(Endianness.BIG_ENDIAN, 4).createTypedArray(Uint32Array);
+    const src8 = src.createTypedArray(Uint8Array);
+    const src16 = src.createTypedArray(Uint16Array);
+
+    let dstOffset = 0;
+    let srcOffset = 0;
+    for (let y = 0; y < texture.height; y++) {
+        for (let x = 0; x < texture.width; x++) {
+            if (numColors <= 256) {
+                buf[dstOffset + x] = lookup32[src8[srcOffset + x]];
+            } else {
+                const offset = src16[srcOffset + x];
+                buf[dstOffset + x] = lookup16[offset];
+                assert(false, "unused");
+            }
+        }
+
+        dstOffset += (texture.width + 3) & 0xffc;
+        srcOffset += texture.width;
+    }
+
+    return ArrayBufferSlice.fromView(buf);
+}
+
+const isRGB15 = true;
+function inflateLookup_RGBA16(
+    texture: InflatedTexture,
+    src: ArrayBufferSlice,
+    lookup: ArrayBufferSlice,
+    numColors: number,
+    offsetAndSetAlpha: boolean = false,
+): ArrayBufferSlice {
+    const buf = new Uint16Array(alignedTextureSize(texture));
+    const lookup8 = lookup.createTypedArray(Uint8Array);
+    const lookup16 = lookup.convertFromEndianness(Endianness.BIG_ENDIAN, 2).createTypedArray(Uint16Array);
+    const src8 = src.createTypedArray(Uint8Array);
+    const src16 = src.createTypedArray(Uint16Array);
+
+    let dstOffset = 0;
+    let srcOffset = 0;
+    for (let y = 0; y < texture.height; y++) {
+        for (let x = 0; x < texture.width; x++) {
+            let value = 0;
+            if (numColors <= 256) {
+                value = lookup8[src8[srcOffset + x] * 2];
+            } else {
+                value = lookup16[src16[srcOffset + x]];
+            }
+
+            if (offsetAndSetAlpha) {
+                value = value << 1 | 1;
+            }
+            buf[dstOffset + x] = value;
+        }
+
+        dstOffset += (texture.width + 3) & 0xffc;
+        srcOffset += texture.width;
+    }
+
+    return ArrayBufferSlice.fromView(buf);
+}
+
+function inflateLookup_I8(
+    texture: InflatedTexture,
+    src: ArrayBufferSlice,
+    lookup: ArrayBufferSlice,
+    numColors: number,
+): ArrayBufferSlice {
+    const buf = new Uint8Array(alignedTextureSize(texture));
+    const lookupView = lookup.createDataView();
+    const srcView = src.createDataView();
+
+    let dstOffset = 0;
+    let srcOffset = 0;
+    for (let y = 0; y < texture.height; y++) {
+        for (let x = 0; x < texture.width; x++) {
+            if (numColors <= 256) {
+                buf[dstOffset + x] = lookupView.getUint8(srcView.getUint8(srcOffset + x) * 2);
+            } else {
+                buf[dstOffset + x] = lookupView.getUint8(srcView.getUint16(srcOffset + x));
+                assert(false, "unused");
+            }
+        }
+
+        dstOffset += (texture.width + 7) & 0xff8;
+        srcOffset += texture.width;
+    }
+
+    return ArrayBufferSlice.fromView(buf);
+}
+
+function inflateLookup_I4(
+    texture: InflatedTexture,
+    src: ArrayBufferSlice,
+    lookup: ArrayBufferSlice,
+    numColors: number,
+): ArrayBufferSlice {
+    assert(numColors <= 256, "unused");
+
+    const buf = new Uint8Array(alignedTextureSize(texture));
+    const lookupView = lookup.createDataView();
+    const srcView = src.createDataView();
+
+    let dstOffset = 0;
+    let srcOffset = 0;
+    for (let y = 0; y < texture.height; y++) {
+        for (let x = 0; x < texture.width; x += 2) {
+            // Out of bounds read on odd-sided textures, eg 0x0d10.
+            const lo = (x < texture.width - 1 ) ? srcView.getUint8(srcOffset + x + 1) * 2 : 0;
+            const hi = srcView.getUint8(srcOffset + x) * 2;
+
+            buf[dstOffset + (x >> 1)] = lookupView.getUint8(hi) << 4 | lookupView.getUint8(lo);
+        }
+
+        dstOffset += ((texture.width + 15) & 0xff0) >> 1;
+        srcOffset += texture.width;
+    }
+
+    return ArrayBufferSlice.fromView(buf);
 }
 
 // Textures must be aligned to 8 bytes per row but are stored without the padding.
@@ -753,6 +1022,7 @@ export function decodeTexture(texture: InflatedTexture, view: DataView, lut: Uin
     case Format.RGBA32:
         decodeTex_RGBA32(dst, view, 0, texture.width, texture.height);
         break;
+    case Format.RGB15:
     case Format.RGBA16:
         decodeTex_RGBA16(dst, view, 0, texture.width, texture.height);
         break;

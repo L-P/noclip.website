@@ -502,7 +502,10 @@ class SceneDesc implements Viewer.SceneDesc {
         }
 
         const bgJSON = sceneContext.dataFetcher.fetchData([pathBase, stage.bgPath, ".json"].join(""));
+
+        console.groupCollapsed('loadViewerTextures');
         const textureHolder = await loadViewerTextures(sceneContext, device);
+        console.groupEnd();
 
         return new Scene(device, textureHolder, stage, BGSegment.fromJSON(await bgJSON));
     }
@@ -526,11 +529,17 @@ async function loadViewerTextures(sceneContext: SceneContext, device: GfxDevice)
             parseTLUT(lut, ArrayBufferSlice.fromView(palData).createDataView(), 0, texture.imageSize, texture.lutMode);
         }
 
-        const preprocessed = tex.preprocessTexture(texture, bin.subarray(texture.offset, texture.size));
-        if (preprocessed === null) {
-            return {gfxTexture: null, extraInfo: null};
+        let decoded: Uint8Array;
+        try {
+            const preprocessed = tex.preprocessTexture(texture, bin.subarray(texture.offset, texture.size));
+            if (preprocessed === null) {
+                return {gfxTexture: null, extraInfo: null};
+            }
+            decoded = tex.decodeTexture(texture, preprocessed.createDataView(), lut);
+        } catch (e) {
+            console.error("exception during decoding of texture", hexzero0x(texture.index, 4), e);
+            return { gfxTexture: null, extraInfo: null };
         }
-        const decoded = tex.decodeTexture(texture, preprocessed.createDataView(), lut);
 
         const gfxTexture = device.createTexture(makeTextureDescriptor2D(
             GfxFormat.U8_RGBA_NORM,
@@ -544,6 +553,8 @@ async function loadViewerTextures(sceneContext: SceneContext, device: GfxDevice)
 
         extraInfo.set("Compression", tex.CompressionMethod[texture.compressionMethod]);
         extraInfo.set("Format", tex.Format[texture.format]);
+        extraInfo.set("Has LODs", "" + texture.hasLOD);
+        extraInfo.set("LOD count", "" + texture.numLODs);
         extraInfo.set("Image format", ImageFormat[texture.imageFormat]);
         extraInfo.set("Image size", ImageSize[texture.imageSize]);
         extraInfo.set("LUT mode", TextureLUT[texture.lutMode]);

@@ -314,7 +314,7 @@ function blurTexture(texture: InflatedTexture, data: ArrayBufferSlice, method: n
 }
 
 // This mess is a straight port from the decomp, warts and all.
-// It could be refactored but there's I'd like to write tests before.
+// It could be refactored but I'd like to write tests before.
 function inflateHuffmanTexture(texture: InflatedTexture, data: ArrayBufferSlice, reader: BitReader): ArrayBufferSlice {
     const numIterations = texture.width * texture.height * numChannels(texture.format);
     const chanSize = toChannelSize(texture.format);

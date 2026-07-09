@@ -75,7 +75,6 @@ export enum Command {
     G_SPNOOP            = 0x00,
     G_VTX               = 0x04,
     G_COL               = 0x07,// like  G_VTX but for vertex colours.
-	// Used in stored assets and unpacks to multiple commands.
     G_TRI4              = 0xB1,
     G_CLEARGEOMETRYMODE = 0xB6,
     G_RDPSETOTHERMODE   = 0xB7,
@@ -85,6 +84,7 @@ export enum Command {
     G_SETOTHERMODE_H    = 0xBA,
     G_TEXTURE           = 0xBB,
     G_TRI1              = 0xBF,
+	// Used in stored assets and unpacks to multiple commands.
     G_NOOP              = 0xC0,
     G_LOADTLUT          = 0xF0,
     G_SETCOMBINE        = 0xFC,

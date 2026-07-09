@@ -14,7 +14,7 @@ import { computeViewMatrix, computeViewMatrixSkybox } from '../Camera.js';
 import { fillMatrix4x3, fillMatrix4x4, fillVec4 } from "../gfx/helpers/UniformBufferHelpers";
 import { hexzero0x } from "../util";
 import { makeBackbufferDescSimple, makeAttachmentClearDescriptor, opaqueBlackFullClearRenderPassDescriptor, standardFullClearRenderPassDescriptor } from '../gfx/helpers/RenderGraphHelpers.js';
-import { setSortKeyTranslucentDepth, setSortKeyDepth, makeSortKey, GfxRendererLayer, GfxRenderInst, GfxRenderInstList } from "../gfx/render/GfxRenderInstManager";
+import { setSortKeyTranslucentDepth, setSortKeyDepth, makeSortKey, GfxRendererLayer, GfxRenderInst, GfxRenderInstList, gfxRenderInstCompareSortKey, GfxRenderInstExecutionOrder } from "../gfx/render/GfxRenderInstManager";
 import { vec3, mat4 } from "gl-matrix";
 import { setAttachmentStateSimple } from '../gfx/helpers/GfxMegaStateDescriptorHelpers';
 import { drawScreenSpaceText, drawWorldSpaceText, getDebugOverlayCanvas2D } from '../DebugJunk'
@@ -60,7 +60,7 @@ class Scene implements Viewer.SceneGfx {
 
     private renderInstListSky = new GfxRenderInstList();
     private renderInstListMain = new GfxRenderInstList();
-    private renderInstListXLU = new GfxRenderInstList();
+    private renderInstListXLU = new GfxRenderInstList(gfxRenderInstCompareSortKey, GfxRenderInstExecutionOrder.Backwards);
     private gfxProgram: GfxProgram | null = null;
     private rooms: Map<number, SceneRoom>;
     private skyColor = standardFullClearRenderPassDescriptor;

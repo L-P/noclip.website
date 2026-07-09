@@ -20,6 +20,14 @@ export function updateHarcodedHacks(
             updateVillaHacks(currentRoom, pos, rooms);
             break;
 
+        case StageID.AirForceOne:
+            updateAirForceOneHacks(currentRoom, pos, rooms);
+            break;
+
+        case StageID.AttackShip:
+            updateAttackShipHacks(currentRoom, pos, rooms);
+            break;
+
         case StageID.Extraction:
         case StageID.MisterBlondesRevenge:
         case StageID.Defection:
@@ -126,6 +134,39 @@ function updateArea51Hacks(currentRoom: number, pos: ReadonlyVec3, rooms: Map<nu
     const threshold = (sectionAbbox.max[0] + sectionBbbox.min[0]) / 2;
     sectionA.forEach(v => rooms.get(v)!.setVisible(pos[0] < threshold));
     sectionB.forEach(v => rooms.get(v)!.setVisible(pos[0] >= threshold));
+}
+
+function updateAttackShipHacks(currentRoom: number, pos: ReadonlyVec3, rooms: Map<number, SceneRoom>): void {
+    { // A fake ship exterior is actually inside the ship.
+        const exterior = rooms.get(0x52)!;
+        const visibleFrom = [0x4d, 0x51, 0x52, 0x53, 0x54];
+        const threshold = 1550; // z
+
+        if (visibleFrom.includes(currentRoom)) {
+            rooms.forEach(v => v.setVisible(
+                visibleFrom.includes(v.number) ||
+                v.pos.z >= threshold
+            ));
+            rooms.get(0x5b)!.setVisible(currentRoom < 0x51);
+            exterior.setVisible(true);
+        } else {
+            rooms.forEach(v => v.setVisible(true));
+            exterior.setVisible(currentRoom === 0x00);
+        }
+    }
+}
+
+function updateAirForceOneHacks(currentRoom: number, pos: ReadonlyVec3, rooms: Map<number, SceneRoom>): void {
+    { // Girders from below overlap the piano room.
+        const girders = [0x3e, 0x3f];
+        const piano = [
+            0x1c, 0x1e, 0x1d, 0x1f, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26,
+            0x27, 0x28,
+            0x48, // Did you know the room above was connected under the bed?
+        ];
+
+        girders.forEach(v => rooms.get(v)!.setVisible(!piano.includes(currentRoom)));
+    }
 }
 
 function updateVillaHacks(currentRoom: number, pos: ReadonlyVec3, rooms: Map<number, SceneRoom>): void {

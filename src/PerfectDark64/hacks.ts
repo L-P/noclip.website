@@ -117,23 +117,55 @@ function updateInstituteHacks(currentRoom: number, pos: ReadonlyVec3, rooms: Map
 }
 
 function updateArea51Hacks(currentRoom: number, pos: ReadonlyVec3, rooms: Map<number, SceneRoom>): void {
-    // The two dissection areas overlap, it's also visible from the rooms leading up to them.
-    const sectionA = [0x90, 0x91, 0x92, 0x93, 0x94, 0x99, 0x9a, 0x98, 0x96, 0x97, 0x97, 0x95];
-    const sectionB = [0x80, 0x81, 0x82, 0x83, 0x84, 0x89, 0x8a, 0x88, 0x86, 0x87, 0x87, 0x85];
-    if (currentRoom === 0x00 || !sectionA.concat(sectionB).includes(currentRoom)) {
-        sectionA.forEach(v => rooms.get(v)!.setVisible(true));
-        sectionB.forEach(v => rooms.get(v)!.setVisible(true));
-        return;
+    { // The two dissection areas overlap, it's also visible from the rooms leading up to them.
+        const sectionA = [0x90, 0x91, 0x92, 0x93, 0x94, 0x99, 0x9a, 0x98, 0x96, 0x97, 0x97, 0x95];
+        const sectionB = [0x80, 0x81, 0x82, 0x83, 0x84, 0x89, 0x8a, 0x88, 0x86, 0x87, 0x87, 0x85];
+        if (currentRoom === 0x00 || !sectionA.concat(sectionB).includes(currentRoom)) {
+            sectionA.forEach(v => rooms.get(v)!.setVisible(true));
+            sectionB.forEach(v => rooms.get(v)!.setVisible(true));
+        } else {
+            let sectionAbbox = new AABB();
+            let sectionBbbox = new AABB();
+            sectionA.forEach(v => sectionAbbox.union(sectionAbbox, rooms.get(v)!.absoluteBBox));
+            sectionB.forEach(v => sectionBbbox.union(sectionBbbox, rooms.get(v)!.absoluteBBox));
+
+            const threshold = (sectionAbbox.max[0] + sectionBbbox.min[0]) / 2;
+            sectionA.forEach(v => rooms.get(v)!.setVisible(pos[0] < threshold));
+            sectionB.forEach(v => rooms.get(v)!.setVisible(pos[0] >= threshold));
+        }
     }
 
-    let sectionAbbox = new AABB();
-    let sectionBbbox = new AABB();
-    sectionA.forEach(v => sectionAbbox.union(sectionAbbox, rooms.get(v)!.absoluteBBox));
-    sectionB.forEach(v => sectionBbbox.union(sectionBbbox, rooms.get(v)!.absoluteBBox));
+    { // Lockers overlap with the hangar.
+        const lockers = [0xbe, 0xb3, 0xb4, 0xb5];
+        const hangar = [
+            0x65, 0x66, 0x67, 0x68, 0x6a, 0x6b, 0x6c, 0x6d, 0x6e,
+            0x70, 0x72, 0x73, 0x78, 0xf5, 0xf9,
+        ];
 
-    const threshold = (sectionAbbox.max[0] + sectionBbbox.min[0]) / 2;
-    sectionA.forEach(v => rooms.get(v)!.setVisible(pos[0] < threshold));
-    sectionB.forEach(v => rooms.get(v)!.setVisible(pos[0] >= threshold));
+        const thresholdX = rooms.get(0xb4)!.absoluteBBox.min[0];
+        const thresholdY = rooms.get(0xb4)!.absoluteBBox.min[1];
+        const thresholdYmax = rooms.get(0xb4)!.absoluteBBox.max[1];
+        const thresholdZ = rooms.get(0xb4)!.absoluteBBox.min[2];
+        const isLockerSide =
+            pos[0] >= thresholdX &&
+            pos[1] >= thresholdY &&
+            pos[1] < thresholdYmax &&
+            pos[2] >= thresholdZ
+        ;
+
+        const inLockers = lockers.includes(currentRoom);
+        const inHangar = hangar.includes(currentRoom);
+
+        lockers.forEach(v => {
+            const hide = inHangar || (inLockers && !isLockerSide);
+            rooms.get(v)!.setVisible(currentRoom === 0x00 || !hide);
+        });
+
+        hangar.forEach(v => {
+            const hide = inLockers || (inHangar && isLockerSide);
+            rooms.get(v)!.setVisible(currentRoom === 0x00 || !hide);
+        });
+    }
 }
 
 function updateAttackShipHacks(currentRoom: number, pos: ReadonlyVec3, rooms: Map<number, SceneRoom>): void {

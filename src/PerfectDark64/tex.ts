@@ -393,13 +393,13 @@ function blurTexture(texture: InflatedTexture, data: ArrayBufferSlice, method: n
                     buf[offset] = (cur + (left + above - aboveLeft)) % chanSize;
                     break;
                 case 4:
-                    buf[offset] = (cur + ((above - aboveLeft) / 2 + left)) % chanSize;
+                    buf[offset] = (cur + Math.trunc((above - aboveLeft) / 2) + left) % chanSize;
                     break;
                 case 5:
-                    buf[offset] = (cur + ((left - aboveLeft) / 2 + above)) % chanSize;
+                    buf[offset] = (cur + Math.trunc((left - aboveLeft) / 2) + above) % chanSize;
                     break;
                 case 6:
-                    buf[offset] = (cur + ((left + above) / 2)) % chanSize;
+                    buf[offset] = (cur + Math.trunc((left + above) / 2)) % chanSize;
                     break;
                 default:
                     console.warn(

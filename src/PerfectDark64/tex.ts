@@ -13,6 +13,7 @@ import {
 import { hexdump }  from "../DebugJunk";
 import type { Inflater }  from "./rom";
 import BitReader from "./bitreader";
+import { inflateLookup, buildLookupTable } from "./tex_comp_lookup";
 
 export interface InflatedTexture {
     index: number;
@@ -124,7 +125,7 @@ function numChannels(format: Format): number {
     return [4, 3, 3, 3, 2, 2, 1, 1, 1, 1, 1, 1, 1][format];
 }
 
-function bitsPerPixel(format: Format): number {
+export function bitsPerPixel(format: Format): number {
     return [32, 16, 24, 15, 16, 8, 4, 8, 4, 16, 16, 16, 16][format];
 }
 
@@ -315,32 +316,6 @@ export function preprocessTexture(
         CompressionMethod[texture.compressionMethod]
     );
     return null;
-}
-
-function buildLookupTable(texture: InflatedTexture, reader: BitReader, numColors: number): ArrayBufferSlice {
-    const bpp = bitsPerPixel(texture.format);
-
-    if (bpp <= 16) {
-        const buf = new Uint16Array(numColors);
-        for (let i = 0; i < numColors; i++) {
-            buf[i] = reader.read(bpp);
-        }
-        return ArrayBufferSlice.fromView(buf);
-    } else if (bpp <= 24) {
-        const buf = new Uint32Array(numColors);
-        for (let i = 0; i < numColors; i++) {
-            buf[i] = reader.read(bpp);
-        }
-        return ArrayBufferSlice.fromView(buf);
-    } else {
-        const buf = new Uint32Array(numColors);
-        for (let i = 0; i < numColors; i++) {
-            buf[i] = reader.read(24) << 8 | reader.read(bpp - 24);
-        }
-        return ArrayBufferSlice.fromView(buf);
-    }
-
-    assert(false, "unreachable");
 }
 
 function blurTexture(texture: InflatedTexture, data: ArrayBufferSlice, method: number): ArrayBufferSlice {
@@ -561,7 +536,7 @@ function unpackChannels(texture: InflatedTexture, data: ArrayBufferSlice): Array
     return data;
 }
 
-function alignedTextureSize(texture: InflatedTexture): number {
+export function alignedTextureSize(texture: InflatedTexture): number {
     const lineWidth = texture.width * numChannels(texture.format);
     const missing = lineWidth % 8;
     const alignedLineWidth = lineWidth + (8 - missing);
@@ -804,194 +779,6 @@ function inflateZlibTexture(
     const indices = decompress(data.subarray(offset));
 
     return [indices, ArrayBufferSlice.fromView(palette)];
-}
-
-function inflateLookup(
-    texture: InflatedTexture,
-    src: ArrayBufferSlice,
-    lookup: ArrayBufferSlice,
-    numColors: number,
-): null|ArrayBufferSlice {
-    switch (texture.format) {
-        case Format.IA4:
-        case Format.I4: return inflateLookup_I4(texture, src, lookup, numColors);
-        case Format.I8:
-        case Format.IA8: return inflateLookup_I8(texture, src, lookup, numColors);
-        case Format.IA16:
-        case Format.RGB24: return inflateLookup_RGB24(texture, src, lookup, numColors);
-        case Format.RGB15: return inflateLookup_RGBA16(texture, src, lookup, numColors, isRGB15);
-        case Format.RGBA16: return inflateLookup_RGBA16(texture, src, lookup, numColors);
-        case Format.RGBA32: return inflateLookup_RGBA32(texture, src, lookup, numColors);
-        default:
-            console.warn(
-                "texture:", hexzero0x(texture.index, 4),
-                "inflateLookup: unhandled format:", Format[texture.format],
-            );
-            return null;
-    }
-
-    assert(false, "unreachable");
-}
-
-function inflateLookup_RGB24(
-    texture: InflatedTexture,
-    src: ArrayBufferSlice,
-    lookup: ArrayBufferSlice,
-    numColors: number,
-): ArrayBufferSlice {
-    const buf = new Uint32Array(alignedTextureSize(texture));
-    const lookup16 = lookup.convertFromEndianness(Endianness.BIG_ENDIAN, 2).createTypedArray(Uint16Array);
-    const lookup32 = lookup.convertFromEndianness(Endianness.BIG_ENDIAN, 4).createTypedArray(Uint32Array);
-    const src8 = src.createTypedArray(Uint8Array);
-    const src16 = src.createTypedArray(Uint16Array);
-
-    let dstOffset = 0;
-    let srcOffset = 0;
-    for (let y = 0; y < texture.height; y++) {
-        for (let x = 0; x < texture.width; x++) {
-            if (numColors <= 256) {
-                buf[dstOffset + x] = (lookup32[src8[srcOffset + x]] << 8) | 0xff;
-            } else {
-                const offset = src16[srcOffset + x];
-                buf[dstOffset + x] = (lookup16[offset] << 8) | 0xff;
-                assert(false, "unused");
-            }
-        }
-
-        dstOffset += (texture.width + 3) & 0xffc;
-        srcOffset += texture.width;
-    }
-
-    return ArrayBufferSlice.fromView(buf);
-}
-
-function inflateLookup_RGBA32(
-    texture: InflatedTexture,
-    src: ArrayBufferSlice,
-    lookup: ArrayBufferSlice,
-    numColors: number,
-): ArrayBufferSlice {
-    const buf = new Uint32Array(alignedTextureSize(texture));
-    const lookup16 = lookup.convertFromEndianness(Endianness.BIG_ENDIAN, 2).createTypedArray(Uint16Array);
-    const lookup32 = lookup.convertFromEndianness(Endianness.BIG_ENDIAN, 4).createTypedArray(Uint32Array);
-    const src8 = src.createTypedArray(Uint8Array);
-    const src16 = src.createTypedArray(Uint16Array);
-
-    let dstOffset = 0;
-    let srcOffset = 0;
-    for (let y = 0; y < texture.height; y++) {
-        for (let x = 0; x < texture.width; x++) {
-            if (numColors <= 256) {
-                buf[dstOffset + x] = lookup32[src8[srcOffset + x]];
-            } else {
-                const offset = src16[srcOffset + x];
-                buf[dstOffset + x] = lookup16[offset];
-                assert(false, "unused");
-            }
-        }
-
-        dstOffset += (texture.width + 3) & 0xffc;
-        srcOffset += texture.width;
-    }
-
-    return ArrayBufferSlice.fromView(buf);
-}
-
-const isRGB15 = true;
-function inflateLookup_RGBA16(
-    texture: InflatedTexture,
-    src: ArrayBufferSlice,
-    lookup: ArrayBufferSlice,
-    numColors: number,
-    offsetAndSetAlpha: boolean = false,
-): ArrayBufferSlice {
-    const buf = new Uint16Array(alignedTextureSize(texture));
-    const lookup8 = lookup.createTypedArray(Uint8Array);
-    const lookup16 = lookup.convertFromEndianness(Endianness.BIG_ENDIAN, 2).createTypedArray(Uint16Array);
-    const src8 = src.createTypedArray(Uint8Array);
-    const src16 = src.createTypedArray(Uint16Array);
-
-    let dstOffset = 0;
-    let srcOffset = 0;
-    for (let y = 0; y < texture.height; y++) {
-        for (let x = 0; x < texture.width; x++) {
-            let value = 0;
-            if (numColors <= 256) {
-                value = lookup8[src8[srcOffset + x] * 2];
-            } else {
-                value = lookup16[src16[srcOffset + x]];
-            }
-
-            if (offsetAndSetAlpha) {
-                value = value << 1 | 1;
-            }
-            buf[dstOffset + x] = value;
-        }
-
-        dstOffset += (texture.width + 3) & 0xffc;
-        srcOffset += texture.width;
-    }
-
-    return ArrayBufferSlice.fromView(buf);
-}
-
-function inflateLookup_I8(
-    texture: InflatedTexture,
-    src: ArrayBufferSlice,
-    lookup: ArrayBufferSlice,
-    numColors: number,
-): ArrayBufferSlice {
-    const buf = new Uint8Array(alignedTextureSize(texture));
-    const lookupView = lookup.createDataView();
-    const srcView = src.createDataView();
-
-    let dstOffset = 0;
-    let srcOffset = 0;
-    for (let y = 0; y < texture.height; y++) {
-        for (let x = 0; x < texture.width; x++) {
-            if (numColors <= 256) {
-                buf[dstOffset + x] = lookupView.getUint8(srcView.getUint8(srcOffset + x) * 2);
-            } else {
-                buf[dstOffset + x] = lookupView.getUint8(srcView.getUint16(srcOffset + x));
-                assert(false, "unused");
-            }
-        }
-
-        dstOffset += (texture.width + 7) & 0xff8;
-        srcOffset += texture.width;
-    }
-
-    return ArrayBufferSlice.fromView(buf);
-}
-
-function inflateLookup_I4(
-    texture: InflatedTexture,
-    src: ArrayBufferSlice,
-    lookup: ArrayBufferSlice,
-    numColors: number,
-): ArrayBufferSlice {
-    assert(numColors <= 256, "unused");
-
-    const buf = new Uint8Array(alignedTextureSize(texture));
-    const lookupView = lookup.createDataView();
-    const srcView = src.createDataView();
-
-    let dstOffset = 0;
-    let srcOffset = 0;
-    for (let y = 0; y < texture.height; y++) {
-        for (let x = 0; x < texture.width; x += 2) {
-            // Out of bounds read on odd-sided textures, eg 0x0d10.
-            const lo = (x < texture.width - 1 ) ? srcView.getUint8(srcOffset + x + 1) * 2 : 0;
-            const hi = srcView.getUint8(srcOffset + x) * 2;
-
-            buf[dstOffset + (x >> 1)] = lookupView.getUint8(hi) << 4 | lookupView.getUint8(lo);
-        }
-
-        dstOffset += ((texture.width + 15) & 0xff0) >> 1;
-        srcOffset += texture.width;
-    }
-
-    return ArrayBufferSlice.fromView(buf);
 }
 
 // Textures must be aligned to 8 bytes per row but are stored without the padding.

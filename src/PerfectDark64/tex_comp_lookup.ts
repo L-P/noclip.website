@@ -87,17 +87,23 @@ function inflateLookup_RGBA32(
     numColors: number,
     offsetAndSetAlpha: boolean = false,
 ): ArrayBufferSlice {
-    assert(numColors <= 256, "unused");
-
     const buf = new Uint32Array(alignedTextureSize(texture));
+    const lookup16 = lookup.convertFromEndianness(Endianness.BIG_ENDIAN, 2).createTypedArray(Uint16Array);
     const lookup32 = lookup.convertFromEndianness(Endianness.BIG_ENDIAN, 4).createTypedArray(Uint32Array);
     const src8 = src.createTypedArray(Uint8Array);
+    const src16 = src.createTypedArray(Uint16Array);
 
     let dstOffset = 0;
     let srcOffset = 0;
     for (let y = 0; y < texture.height; y++) {
         for (let x = 0; x < texture.width; x++) {
             let value = lookup32[src8[srcOffset + x]];
+            if (numColors <= 256) {
+                value = lookup32[src8[srcOffset + x]];
+            } else {
+                value = lookup16[src16[srcOffset + x]];
+            }
+
             if (offsetAndSetAlpha) {
                 value = (value << 8) | 0xFF;
             }
@@ -120,18 +126,22 @@ function inflateLookup_RGBA16(
     numColors: number,
     offsetAndSetAlpha: boolean = false,
 ): ArrayBufferSlice {
-    assert(numColors <= 256, "unused");
-
     const buf = new Uint16Array(alignedTextureSize(texture));
     const lookup8 = lookup.createTypedArray(Uint8Array);
+    const lookup16 = lookup.convertFromEndianness(Endianness.BIG_ENDIAN, 2).createTypedArray(Uint16Array);
     const src8 = src.createTypedArray(Uint8Array);
+    const src16 = src.createTypedArray(Uint16Array);
 
     let dstOffset = 0;
     let srcOffset = 0;
     for (let y = 0; y < texture.height; y++) {
         for (let x = 0; x < texture.width; x++) {
             let value = 0;
-            value = lookup8[src8[srcOffset + x] * 2];
+            if (numColors <= 256) {
+                value = lookup8[src8[srcOffset + x] * 2];
+            } else {
+                value = lookup16[src16[srcOffset + x]];
+            }
 
             if (offsetAndSetAlpha) {
                 value = value << 1 | 1;

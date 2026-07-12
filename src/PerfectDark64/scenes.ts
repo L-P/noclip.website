@@ -502,10 +502,7 @@ class SceneDesc implements Viewer.SceneDesc {
         }
 
         const bgJSON = sceneContext.dataFetcher.fetchData([pathBase, stage.bgPath, ".json"].join(""));
-
-        console.groupCollapsed('loadViewerTextures');
         const textureHolder = await loadViewerTextures(sceneContext, device);
-        console.groupEnd();
 
         return new Scene(device, textureHolder, stage, BGSegment.fromJSON(await bgJSON));
     }
@@ -535,7 +532,7 @@ async function loadViewerTextures(sceneContext: SceneContext, device: GfxDevice)
             if (preprocessed === null) {
                 return {gfxTexture: null, extraInfo: null};
             }
-            decoded = tex.decodeTexture(texture, preprocessed.createDataView(), lut);
+            decoded = tex.decodeTexture(texture, preprocessed!.createDataView(), lut);
         } catch (e) {
             console.error("exception during decoding of texture", hexzero0x(texture.index, 4), e);
             return { gfxTexture: null, extraInfo: null };

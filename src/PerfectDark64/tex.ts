@@ -10,7 +10,6 @@ import {
 } from "../Common/N64/Image"; import { GfxDevice } from
 "../gfx/platform/GfxPlatform";
 
-import { hexdump }  from "../DebugJunk";
 import type { Inflater }  from "./rom";
 import BitReader from "./bitreader";
 import { inflateLookup, buildLookupTable } from "./tex_comp_lookup";
@@ -675,7 +674,8 @@ function unpackChannels_RGBA16(texture: InflatedTexture, data: ArrayBufferSlice)
         dstOffset += (texture.width + 3) & 0xffc;
     }
 
-    return ArrayBufferSlice.fromView(out);
+    // Not sure why in this specific case I need to swap bytes but not elsewhere.
+    return ArrayBufferSlice.fromView(out).convertFromEndianness(Endianness.BIG_ENDIAN, 2);
 }
 
 function unpackChannels_I8(texture: InflatedTexture, data: ArrayBufferSlice): ArrayBufferSlice {

@@ -54,57 +54,63 @@ export enum Format {
 }
 
 function toGBIFormat(format: Format): ImageFormat {
-    return [
-        ImageFormat.G_IM_FMT_RGBA,
-        ImageFormat.G_IM_FMT_RGBA,
-        ImageFormat.G_IM_FMT_RGBA,
-        ImageFormat.G_IM_FMT_RGBA,
-        ImageFormat.G_IM_FMT_IA,
-        ImageFormat.G_IM_FMT_IA,
-        ImageFormat.G_IM_FMT_IA,
-        ImageFormat.G_IM_FMT_I,
-        ImageFormat.G_IM_FMT_I,
-        ImageFormat.G_IM_FMT_CI,
-        ImageFormat.G_IM_FMT_CI,
-        ImageFormat.G_IM_FMT_CI,
-        ImageFormat.G_IM_FMT_CI,
-    ][format];
+    switch (format) {
+        case Format.RGBA32:     return  ImageFormat.G_IM_FMT_RGBA;
+        case Format.RGBA16:     return  ImageFormat.G_IM_FMT_RGBA;
+        case Format.RGB24:      return  ImageFormat.G_IM_FMT_RGBA;
+        case Format.RGB15:      return  ImageFormat.G_IM_FMT_RGBA;
+        case Format.IA16:       return  ImageFormat.G_IM_FMT_IA;
+        case Format.IA8:        return  ImageFormat.G_IM_FMT_IA;
+        case Format.IA4:        return  ImageFormat.G_IM_FMT_IA;
+        case Format.I8:         return  ImageFormat.G_IM_FMT_I;
+        case Format.I4:         return  ImageFormat.G_IM_FMT_I;
+        case Format.RGBA16_CI8: return  ImageFormat.G_IM_FMT_CI;
+        case Format.RGBA16_CI4: return  ImageFormat.G_IM_FMT_CI;
+        case Format.IA16_CI8:   return  ImageFormat.G_IM_FMT_CI;
+        case Format.IA16_CI4:   return  ImageFormat.G_IM_FMT_CI;
+
+        default: throw new Error(`invalid texture format: ${format}`);
+    }
 }
 
 function toGBISize(format: Format): ImageSize {
-    return [
-        ImageSize.G_IM_SIZ_32b,
-        ImageSize.G_IM_SIZ_16b,
-        ImageSize.G_IM_SIZ_32b,
-        ImageSize.G_IM_SIZ_16b,
-        ImageSize.G_IM_SIZ_16b,
-        ImageSize.G_IM_SIZ_8b,
-        ImageSize.G_IM_SIZ_4b,
-        ImageSize.G_IM_SIZ_8b,
-        ImageSize.G_IM_SIZ_4b,
-        ImageSize.G_IM_SIZ_8b,
-        ImageSize.G_IM_SIZ_4b,
-        ImageSize.G_IM_SIZ_8b,
-        ImageSize.G_IM_SIZ_4b,
-    ][format];
+    switch (format) {
+        case Format.RGBA32:     return ImageSize.G_IM_SIZ_32b;
+        case Format.RGBA16:     return ImageSize.G_IM_SIZ_16b;
+        case Format.RGB24:      return ImageSize.G_IM_SIZ_32b;
+        case Format.RGB15:      return ImageSize.G_IM_SIZ_16b;
+        case Format.IA16:       return ImageSize.G_IM_SIZ_16b;
+        case Format.IA8:        return ImageSize.G_IM_SIZ_8b;
+        case Format.IA4:        return ImageSize.G_IM_SIZ_4b;
+        case Format.I8:         return ImageSize.G_IM_SIZ_8b;
+        case Format.I4:         return ImageSize.G_IM_SIZ_4b;
+        case Format.RGBA16_CI8: return ImageSize.G_IM_SIZ_8b;
+        case Format.RGBA16_CI4: return ImageSize.G_IM_SIZ_4b;
+        case Format.IA16_CI8:   return ImageSize.G_IM_SIZ_8b;
+        case Format.IA16_CI4:   return ImageSize.G_IM_SIZ_4b;
+
+        default: throw new Error(`invalid texture format: ${format}`);
+    }
 }
 
 function toGBILUTMode(format: Format): TextureLUT {
-    return [
-        TextureLUT.G_TT_NONE,
-        TextureLUT.G_TT_NONE,
-        TextureLUT.G_TT_NONE,
-        TextureLUT.G_TT_NONE,
-        TextureLUT.G_TT_NONE,
-        TextureLUT.G_TT_NONE,
-        TextureLUT.G_TT_NONE,
-        TextureLUT.G_TT_NONE,
-        TextureLUT.G_TT_NONE,
-        TextureLUT.G_TT_RGBA16,
-        TextureLUT.G_TT_RGBA16,
-        TextureLUT.G_TT_IA16,
-        TextureLUT.G_TT_IA16,
-    ][format];
+    switch (format) {
+        case Format.RGBA32:     return TextureLUT.G_TT_NONE;
+        case Format.RGBA16:     return TextureLUT.G_TT_NONE;
+        case Format.RGB24:      return TextureLUT.G_TT_NONE;
+        case Format.RGB15:      return TextureLUT.G_TT_NONE;
+        case Format.IA16:       return TextureLUT.G_TT_NONE;
+        case Format.IA8:        return TextureLUT.G_TT_NONE;
+        case Format.IA4:        return TextureLUT.G_TT_NONE;
+        case Format.I8:         return TextureLUT.G_TT_NONE;
+        case Format.I4:         return TextureLUT.G_TT_NONE;
+        case Format.RGBA16_CI8: return TextureLUT.G_TT_RGBA16;
+        case Format.RGBA16_CI4: return TextureLUT.G_TT_RGBA16;
+        case Format.IA16_CI8:   return TextureLUT.G_TT_IA16;
+        case Format.IA16_CI4:   return TextureLUT.G_TT_IA16;
+
+        default: throw new Error(`invalid texture format: ${format}`);
+    }
 }
 
 // > For non-paletted images, size in decimal of each colour channel.
@@ -112,21 +118,63 @@ function toGBILUTMode(format: Format): TextureLUT {
 // > For paletted images, same thing but for the palette indices instead.
 // - pd64 decomp
 function toChannelSize(format: Format): number {
-    return [256, 32, 256, 32, 256, 16, 8, 256, 16, 256, 16, 256, 16][format];
+    switch (format) {
+        case Format.RGBA32:     return 256;
+        case Format.RGBA16:     return 32;
+        case Format.RGB24:      return 256;
+        case Format.RGB15:      return 32;
+        case Format.IA16:       return 256;
+        case Format.IA8:        return 16;
+        case Format.IA4:        return 8;
+        case Format.I8:         return 256;
+        case Format.I4:         return 16;
+        case Format.RGBA16_CI8: return 256;
+        case Format.RGBA16_CI4: return 16;
+        case Format.IA16_CI8:   return 256;
+        case Format.IA16_CI4:   return 16;
+
+        default: throw new Error(`invalid texture format: ${format}`);
+    }
 }
 
 function has1BitAlpha(format:Format): boolean {
-    return !![
-        0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0,
-    ][format];
+    switch (format) {
+        case Format.RGBA32:     return false;
+        case Format.RGBA16:     return true;
+        case Format.RGB24:      return false;
+        case Format.RGB15:      return false;
+        case Format.IA16:       return false;
+        case Format.IA8:        return false;
+        case Format.IA4:        return true;
+        case Format.I8:         return false;
+        case Format.I4:         return false;
+        case Format.RGBA16_CI8: return false;
+        case Format.RGBA16_CI4: return false;
+        case Format.IA16_CI8:   return false;
+        case Format.IA16_CI4:   return false;
+
+        default: throw new Error(`invalid texture format: ${format}`);
+    }
 }
 
 function numChannels(format: Format): number {
-    return [4, 3, 3, 3, 2, 2, 1, 1, 1, 1, 1, 1, 1][format];
-}
+    switch (format) {
+        case Format.RGBA32:     return 4;
+        case Format.RGBA16:     return 3;
+        case Format.RGB24:      return 3;
+        case Format.RGB15:      return 3;
+        case Format.IA16:       return 2;
+        case Format.IA8:        return 2;
+        case Format.IA4:        return 1;
+        case Format.I8:         return 1;
+        case Format.I4:         return 1;
+        case Format.RGBA16_CI8: return 1;
+        case Format.RGBA16_CI4: return 1;
+        case Format.IA16_CI8:   return 1;
+        case Format.IA16_CI4:   return 1;
 
-export function bitsPerPixel(format: Format): number {
-    return [32, 16, 24, 15, 16, 8, 4, 8, 4, 16, 16, 16, 16][format];
+        default: throw new Error(`invalid texture format: ${format}`);
+    }
 }
 
 function indicePerByte(format: Format): number {
@@ -138,7 +186,7 @@ function indicePerByte(format: Format): number {
         case Format.IA16_CI4:
             return 2;
         default:
-            assert(false, "unreachable");
+            throw new Error(`unhandled texture format: ${format}`);
     }
 }
 

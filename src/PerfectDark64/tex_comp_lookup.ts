@@ -6,7 +6,23 @@ import BitReader from "./bitreader";
 import { Format, InflatedTexture, alignedTextureSize } from "./tex";
 
 function bitsPerPixel(format: Format): number {
-    return [32, 16, 24, 15, 16, 8, 4, 8, 4, 16, 16, 16, 16][format];
+    switch (format) {
+        case Format.RGBA32:     return 32;
+        case Format.RGBA16:     return 16;
+        case Format.RGB24:      return 24;
+        case Format.RGB15:      return 15;
+        case Format.IA16:       return 16;
+        case Format.IA8:        return 8;
+        case Format.IA4:        return 4;
+        case Format.I8:         return 8;
+        case Format.I4:         return 4;
+        case Format.RGBA16_CI8: return 16;
+        case Format.RGBA16_CI4: return 16;
+        case Format.IA16_CI8:   return 16;
+        case Format.IA16_CI4:   return 16;
+
+        default: throw new Error(`invalid texture format: ${format}`);
+    }
 }
 
 export function buildLookupTable(texture: InflatedTexture, reader: BitReader, numColors: number): ArrayBufferSlice {

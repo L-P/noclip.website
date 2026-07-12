@@ -18,6 +18,6 @@ export default class BitReader {
         }
 
         this.accBits -= nBits;
-        return (this.accValue >> this.accBits) & ((1 << nBits) - 1);
+        return (this.accValue >>> this.accBits) & ((1 << nBits) - 1);
     }
 }

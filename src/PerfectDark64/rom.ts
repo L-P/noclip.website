@@ -171,7 +171,7 @@ export default class ROM {
             offset += tex.textureListEntryStructSize
         ) {
             ret.push({
-                soundSurfaceType: (view.getUint8(offset) & 0xF0) >> 4,
+                soundSurfaceType: (view.getUint8(offset) & 0xF0) >>> 4,
                 surfaceType: view.getUint8(offset) & 0xF0,
                 dataOffset:  view.getUint32(offset) & 0x00FFFFFF,
             });

@@ -172,7 +172,7 @@ export class GFX {
     }
 
     public command(): Command {
-        return (this.w0 >> 24) & 0xFF;
+        return (this.w0 >>> 24) & 0xFF;
     }
 }
 export const gfxStructSize = 8;
@@ -315,7 +315,7 @@ interface SegmentAddress {
 
 function segAddr(addr: number): SegmentAddress {
     return {
-        segment: (addr & 0xFF000000) >> 24,
+        segment: (addr & 0xFF000000) >>> 24,
         address: addr & 0x00FFFFFF,
     };
 }
@@ -480,7 +480,7 @@ export class Interpreter {
                 // NOOP
                 break
             default:
-                const cmd = gfx.command() << 24 >> 24;
+                const cmd = gfx.command() << 24 >>> 24;
                 console.warn("unknown command:", cmd, hexzero0x(gfx.command()).slice(8));
         }
     }
@@ -531,7 +531,7 @@ export class Interpreter {
                 v.t /= 0x400;
             }
 
-            const col: Colour = this.colCache[v.colour >> 2];
+            const col: Colour = this.colCache[v.colour >>> 2];
             if (col !== undefined) {
                 v.cr = col.r / 255.0;
                 v.cg = col.g / 255.0;
@@ -662,9 +662,9 @@ export class Interpreter {
 
         const flag = gfx.w0 & 0x200;
         const type = gfx.c0(0, 3); // Most common is 2, then 4.
-        const smode  = (gfx.w0 >> 22) & 3;
-        const tmode  = (gfx.w0 >> 20) & 3;
-        const offset = (gfx.w0 >> 18) & 3;
+        const smode  = (gfx.w0 >>> 22) & 3;
+        const tmode  = (gfx.w0 >>> 20) & 3;
+        const offset = (gfx.w0 >>> 18) & 3;
 
         this.DP_TileState[0].cmt = tmode;
         this.DP_TileState[0].cms = smode;

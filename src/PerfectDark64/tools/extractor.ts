@@ -139,7 +139,7 @@ const decompress: Inflater = function(buf: ArrayBufferSlice): ArrayBufferSlice {
         return buf;
     }
 
-    const expectedDecompressedSize = view.getUint32(2) >> 8;
+    const expectedDecompressedSize = view.getUint32(2) >>> 8;
     const decompressed = inflateRawSync(buf.createTypedArray(Uint8Array, 5));
     if (expectedDecompressedSize !== decompressed.length) {
         throw new Error("decompressed data size doesn't match header");

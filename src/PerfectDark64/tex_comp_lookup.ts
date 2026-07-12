@@ -192,10 +192,10 @@ function inflateLookup_I4(
             const lo = (x < texture.width - 1 ) ? srcView.getUint8(srcOffset + x + 1) * 2 : 0;
             const hi = srcView.getUint8(srcOffset + x) * 2;
 
-            buf[dstOffset + (x >> 1)] = lookupView.getUint8(hi) << 4 | lookupView.getUint8(lo);
+            buf[dstOffset + (x >>> 1)] = lookupView.getUint8(hi) << 4 | lookupView.getUint8(lo);
         }
 
-        dstOffset += ((texture.width + 15) & 0xff0) >> 1;
+        dstOffset += ((texture.width + 15) & 0xff0) >>> 1;
         srcOffset += texture.width;
     }
 

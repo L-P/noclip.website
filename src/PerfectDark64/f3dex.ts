@@ -8,9 +8,10 @@ import {
 import { AABB } from "../Geometry";
 import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { ImageFormat, ImageSize } from "../Common/N64/Image";
-import { ReadonlyVec3, vec4 } from "gl-matrix";
+import { ReadonlyVec3, vec4, mat4 } from "gl-matrix";
 import { createBufferFromData } from "../gfx/helpers/BufferHelpers";
 import { nArray, assert, hexzero0x } from "../util";
+import { calcTextureMatrixFromRSPState } from '../Common/N64/RSP.js';
 
 import { Program } from "./shaders";
 import * as tex from "./tex";
@@ -188,6 +189,7 @@ export class Mesh {
     public wrapS: GfxWrapMode = GfxWrapMode.Repeat;
     public wrapT: GfxWrapMode = GfxWrapMode.Repeat;
     public aabb: AABB;
+    public texMatrix: mat4 = mat4.create();
 
     // Set by and for the renderer and the code around it, not the interpreter.
     public sortKeyBase: number;
@@ -216,6 +218,7 @@ export class MeshBuilder {
     public wrapS: GfxWrapMode;
     public wrapT: GfxWrapMode;
     public aabb: AABB = new AABB();
+    public texMatrix: mat4 = mat4.create();
 
     public vtxToIndex: Map<string, number> = new Map();
 
@@ -250,6 +253,7 @@ export class MeshBuilder {
         mesh.wrapS = this.wrapS;
         mesh.wrapT = this.wrapT;
         mesh.aabb = this.aabb;
+        mesh.texMatrix = this.texMatrix;
 
         const vertexArray = new Float32Array(this.vertices.length * computedVertexElementsCount);
         this.vertices.forEach((v, i) => {
@@ -355,6 +359,18 @@ export class Interpreter {
             const tile = this.DP_TileState[this.SP_TextureState.tile];
             this.cur.wrapT = texModeToGfx(tile.cmt);
             this.cur.wrapS = texModeToGfx(tile.cms);
+
+            if (this.cur.textureNumber !== null) {
+                const meta: tex.InflatedTexture = this.textureCache.getMetadata(this.cur.textureNumber)!;
+                calcTextureMatrixFromRSPState(
+                    this.cur.texMatrix,
+                    this.SP_TextureState.s, this.SP_TextureState.t,
+                    meta.width, meta.height,
+                    tile.shifts, tile.shiftt,
+                );
+            } else {
+                mat4.identity(this.cur.texMatrix);
+            }
 
             this.meshes.push(this.cur);
         }
@@ -497,9 +513,6 @@ export class Interpreter {
 
         for (let i = 0; i < n; i++) {
             this.vtxCache[dstIndex + i] = this.vtxSegments[src.segment][srcIndex + i];
-
-            this.vtxCache[dstIndex + i].s *= this.SP_TextureState.s;
-            this.vtxCache[dstIndex + i].t *= this.SP_TextureState.t;
         }
     }
 
@@ -520,16 +533,8 @@ export class Interpreter {
         ];
 
         verts.forEach(v => {
-            // Heuristic, could not find where this is done…
-            v.s /= 0x400;
-
-            // … or why.
-            const tile = this.DP_TileState[this.SP_TextureState.tile];
-            if (texModeToGfx(tile.cmt) === GfxWrapMode.Clamp) {
-                v.t /= 0x600;
-            }  else {
-                v.t /= 0x400;
-            }
+            v.s /= 0x20;
+            v.t /= 0x20;
 
             const col: Colour = this.colCache[v.colour >>> 2];
             if (col !== undefined) {
@@ -662,19 +667,9 @@ export class Interpreter {
 
         const flag = gfx.w0 & 0x200;
         const type = gfx.c0(0, 3); // Most common is 2, then 4.
-        const smode  = (gfx.w0 >>> 22) & 3;
-        const tmode  = (gfx.w0 >>> 20) & 3;
+        this.DP_TileState[0].cms = (gfx.w0 >>> 22) & 3;
+        this.DP_TileState[0].cmt = (gfx.w0 >>> 20) & 3;
         const offset = (gfx.w0 >>> 18) & 3;
-
-        this.DP_TileState[0].cmt = tmode;
-        this.DP_TileState[0].cms = smode;
-
-        if (offset === 2) {
-            this.DP_TileState[0].uls = 2;
-            this.DP_TileState[0].ult = 2;
-            this.DP_TileState[0].lrs = 2;
-            this.DP_TileState[0].lrt = 2;
-        }
 
         const base = offset === 2 ? 2 : 0;
         this.gDPSetTileSize(

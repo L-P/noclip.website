@@ -11,8 +11,8 @@ import { IS_DEVELOPMENT } from "../BuildVersion";
 import { TextureLUT, parseTLUT, getTLUTSize, ImageFormat, ImageSize } from "../Common/N64/Image";
 import { SceneContext } from "../SceneBase";
 import { computeViewMatrix, computeViewMatrixSkybox } from '../Camera.js';
-import { fillMatrix4x3, fillMatrix4x4, fillVec4 } from "../gfx/helpers/UniformBufferHelpers";
-import { hexzero0x } from "../util";
+import { fillMatrix4x2, fillMatrix4x3, fillMatrix4x4, fillVec4 } from "../gfx/helpers/UniformBufferHelpers";
+import { assert, hexzero0x } from "../util";
 import { makeBackbufferDescSimple, makeAttachmentClearDescriptor, opaqueBlackFullClearRenderPassDescriptor, standardFullClearRenderPassDescriptor } from '../gfx/helpers/RenderGraphHelpers.js';
 import { setSortKeyTranslucentDepth, setSortKeyDepth, makeSortKey, GfxRendererLayer, GfxRenderInst, GfxRenderInstList, gfxRenderInstCompareSortKey, GfxRenderInstExecutionOrder } from "../gfx/render/GfxRenderInstManager";
 import { vec3, mat4 } from "gl-matrix";
@@ -335,7 +335,7 @@ class Scene implements Viewer.SceneGfx {
             numUniformBuffers: 1,
         }]);
 
-        const data = template.allocateUniformBufferF32(Program.ub_SceneParams, (4*4) + (3*4) + 4);
+        const data = template.allocateUniformBufferF32(Program.ub_SceneParams, (4*4) + (3*4) + (2*2*4) + 4);
         let offs = 0;
 
         if (mesh.isSkybox) {
@@ -350,6 +350,9 @@ class Scene implements Viewer.SceneGfx {
         let mat = mat4.create();
         mat4.translate(mat, mat, [pos.x, pos.y, pos.z]);
         offs += fillMatrix4x3(data, offs, mat);
+
+        offs += fillMatrix4x2(data, offs, mesh.texMatrix);
+        offs += fillMatrix4x2(data, offs, mesh.texMatrix); // TODO second tex
 
         data[offs++] = +(mesh.texture !== null);
         data[offs++] = opaque ? 1.0 : 0.0;
@@ -502,7 +505,10 @@ class SceneDesc implements Viewer.SceneDesc {
         }
 
         const bgJSON = sceneContext.dataFetcher.fetchData([pathBase, stage.bgPath, ".json"].join(""));
+
+        console.groupCollapsed('loadViewerTextures');
         const textureHolder = await loadViewerTextures(sceneContext, device);
+        console.groupEnd();
 
         return new Scene(device, textureHolder, stage, BGSegment.fromJSON(await bgJSON));
     }

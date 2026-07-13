@@ -13,18 +13,19 @@ export class Program extends DeviceProgram {
         layout(std140) uniform ub_SceneParams {
             Mat4x4 u_ClipFromWorld;
             Mat3x4 u_WorldFromLocal;
+            Mat2x4 u_TexMatrix[2];
             float u_hasValidTexture;
             float u_minAlpha;
         };
 
         uniform sampler2D u_Texture;
+
+        varying vec4 v_TexCoord;
+        varying vec4 v_VertexColors;
     `;
 
     public override frag = `
         ${Program.common}
-
-        in vec2 v_TexCoord;
-        in vec4 v_VertexColors;
 
         void main() {
             vec4 col = vec4(1.0, 1.0, 1.0, 1.0);
@@ -49,15 +50,13 @@ export class Program extends DeviceProgram {
         layout(location = ${Program.a_TexCoord}) in vec2 a_TexCoord;
         layout(location = ${Program.a_VertexColors}) in vec4 a_VertexColors;
 
-        out vec2 v_TexCoord;
-        out vec4 v_VertexColors;
-
         void main() {
             vec3 t_PositionWorld = (UnpackMatrix(u_WorldFromLocal) * vec4(a_Position.xyz, 1.0f)).xyz;
 
             gl_Position = UnpackMatrix(u_ClipFromWorld) * vec4(t_PositionWorld, 1.0f);
 
-            v_TexCoord = a_TexCoord.xy;
+            v_TexCoord.xy = UnpackMatrix(u_TexMatrix[0]) * vec4(a_TexCoord, 1.0, 1.0);
+            v_TexCoord.zw = UnpackMatrix(u_TexMatrix[1]) * vec4(a_TexCoord, 1.0, 1.0);
             v_VertexColors = a_VertexColors;
         }
     `;

@@ -1,17 +1,13 @@
 import * as F3DEX from "../BanjoKazooie/f3dex";
 import * as RDP from "../Common/N64/RDP";
-import {
-    GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxCullMode, GfxDevice,
-    GfxFormat, GfxInputLayout, GfxTexture, GfxVertexBufferFrequency,
-    GfxWrapMode,
-} from "../gfx/platform/GfxPlatform";
 import { AABB } from "../Geometry";
+import { GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxCullMode, GfxDevice, GfxFormat, GfxInputLayout, GfxTexture, GfxVertexBufferFrequency, GfxWrapMode, } from "../gfx/platform/GfxPlatform";
 import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { ImageFormat, ImageSize } from "../Common/N64/Image";
 import { ReadonlyVec3, vec4, mat4 } from "gl-matrix";
+import { calcTextureMatrixFromRSPState } from '../Common/N64/RSP.js';
 import { createBufferFromData } from "../gfx/helpers/BufferHelpers";
 import { nArray, assert, hexzero0x } from "../util";
-import { calcTextureMatrixFromRSPState } from '../Common/N64/RSP.js';
 
 import { Program } from "./shaders";
 import * as tex from "./tex";
@@ -27,7 +23,6 @@ export interface Vertex {
     t:      number; // uint16
 };
 export const vertexStructSize = 12;
-const vertexElementsCount = 7;
 
 export function toReadonlyVec3(v: Vertex): ReadonlyVec3 {
     return [v.x, v.y, v.z];
@@ -332,7 +327,6 @@ export class Interpreter {
     private colCache: Colour[] = [];
     private geometryMode: GeometryMode = 0; // bitflags
 
-    private stateChanged: boolean = false;
     private SP_TextureState = new F3DEX.TextureState();
     private DP_OtherModeL: number = 0;
     private DP_OtherModeH: number = 0;
@@ -341,7 +335,6 @@ export class Interpreter {
     private DP_CombineH: number = 0;
     private DP_TileState = nArray(8, () => new RDP.TileState());
     private DP_TextureImageState = new F3DEX.TextureImageState();
-    private DP_TMemTracker = new Map<number, number>();
 
     private cur: MeshBuilder = new MeshBuilder();
     private meshes: MeshBuilder[] = [];
@@ -587,14 +580,10 @@ export class Interpreter {
     public gDPSetTile(fmt: number, siz: number, line: number, tmem: number, tile: number, palette: number, cmt: number, maskt: number, shiftt: number, cms: number, masks: number, shifts: number): void {
         // console.debug("gDPSetTile", fmt, siz, line, tmem, tile, palette, cmt, maskt, shiftt, cms, masks, shifts);
         this.DP_TileState[tile].set(fmt, siz, line, tmem, palette, cmt, maskt, shiftt, cms, masks, shifts);
-        this.stateChanged = true;
     }
 
     public gDPLoadTLUT(tile: number, count: number): void {
         console.debug("gDPLoadTLUT", tile, count);
-        // Track the TMEM destination back to the originating DRAM address.
-        const tmemDst = this.DP_TileState[tile].tmem;
-        this.DP_TMemTracker.set(tmemDst, this.DP_TextureImageState.addr);
     }
 
     public gDPLoadBlock(tileIndex: number, uls: number, ult: number, texels: number, dxt: number): void {
@@ -603,23 +592,17 @@ export class Interpreter {
         assert(uls === 0 && ult === 0);
 
         const tile = this.DP_TileState[tileIndex];
-
-        // Track the TMEM destination back to the originating DRAM address.
-        this.DP_TMemTracker.set(tile.tmem, this.DP_TextureImageState.addr);
-        this.stateChanged = true;
     }
 
     public gDPSetTileSize(tile: number, uls: number, ult: number, lrs: number, lrt: number): void {
         // console.debug("gDPSetTileSize", tile, uls, ult, lrs, lrt);
         this.DP_TileState[tile].setSize(uls, ult, lrs, lrt);
-        this.stateChanged = true;
     }
 
     public gSPTexture(on: boolean, tile: number, level: number, s: number, t: number): void {
         // console.debug("gSPTexture", on, tile, level, s, t);
         // This is the texture we're using to rasterize triangles going forward.
         this.SP_TextureState.set(on, tile, level, s / 0x10000, t / 0x10000);
-        this.stateChanged = true;
     }
 
     public gDPSetOtherModeL(sft: number, len: number, w1: number): void {
@@ -627,7 +610,6 @@ export class Interpreter {
         const DP_OtherModeL = (this.DP_OtherModeL & ~mask) | (w1 & mask);
         if (DP_OtherModeL !== this.DP_OtherModeL) {
             this.DP_OtherModeL = DP_OtherModeL;
-            this.stateChanged = true;
         }
     }
 
@@ -636,7 +618,6 @@ export class Interpreter {
         const DP_OtherModeH = (this.DP_OtherModeH & ~mask) | (w1 & mask);
         if (DP_OtherModeH !== this.DP_OtherModeH) {
             this.DP_OtherModeH = DP_OtherModeH;
-            this.stateChanged = true;
         }
     }
 
@@ -644,13 +625,11 @@ export class Interpreter {
         if (this.DP_CombineH !== w0 || this.DP_CombineL !== w1) {
             this.DP_CombineH = w0;
             this.DP_CombineL = w1;
-            this.stateChanged = true;
         }
     }
 
     public gSPSetEnvColor(r: number, g: number, b: number, a: number) {
         vec4.set(this.DP_EnvColor, r / 0xFF, g / 0xFF, b / 0xFF, a / 0xFF);
-        this.stateChanged = true;
     }
 
     public unpackTextureGFX(gfx: GFX): void {
@@ -669,8 +648,8 @@ export class Interpreter {
         const type = gfx.c0(0, 3); // Most common is 2, then 4.
         this.DP_TileState[0].cms = (gfx.w0 >>> 22) & 3;
         this.DP_TileState[0].cmt = (gfx.w0 >>> 20) & 3;
-        const offset = (gfx.w0 >>> 18) & 3;
 
+        const offset = (gfx.w0 >>> 18) & 3;
         const base = offset === 2 ? 2 : 0;
         this.gDPSetTileSize(
             0,
@@ -707,7 +686,6 @@ export class Interpreter {
 function texModeToGfx(mode: number): GfxWrapMode {
     switch(mode) {
         case 0:
-        default:
             return GfxWrapMode.Repeat;
         case 1:
             return GfxWrapMode.Clamp;
@@ -715,5 +693,5 @@ function texModeToGfx(mode: number): GfxWrapMode {
             return GfxWrapMode.Mirror;
     }
 
-    assert(false, "unreachable");
+    throw new Error(`invalid texture wrap mode: ${mode}`);
 }

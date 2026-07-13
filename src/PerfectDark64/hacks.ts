@@ -50,8 +50,8 @@ export function updateHarcodedHacks(
 
 function updateChicagoHacks(currentRoom: number, pos: ReadonlyVec3, rooms: Map<number, SceneRoom>): void {
     { // Reflections on the street overlap the bar interior.
-        const bar = [0x04, 0x05, 0x07, 0x08, 0x09, 0x0d, 0x0e, 0x0a, 0x0b, 0x0c];
-        const aboveBar = [0x47, 0x36, 0x34];
+        const bar = [0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0d, 0x0e, 0x0a, 0x0b, 0x0c];
+        const aboveBar = [0x47, 0x36, 0x34, 0x46];
         const underground = pos[1] < -16;
         const inBadBBox = aboveBar.includes(currentRoom);
         const inBar = bar.includes(currentRoom);
@@ -60,6 +60,13 @@ function updateChicagoHacks(currentRoom: number, pos: ReadonlyVec3, rooms: Map<n
             const hide = inBar || (inBadBBox && underground);
             rooms.get(v)!.setVisible(!hide);
         });
+    }
+
+    { // Alcove next to the limo overlaps with the backalley
+        const alcove = [0x37, 0x10, 0x11, 0x12, 0x13];
+        const alley = 0x40;
+
+        rooms.get(alley)!.setVisible(!alcove.includes(currentRoom));
     }
 }
 
@@ -99,7 +106,7 @@ function updateDDTowerHacks(currentRoom: number, pos: ReadonlyVec3, rooms: Map<n
 
     { // Stairs overlap with cheese room.
         const stairs = [0x53, 0x4b, 0x4c, 0x4d, 0x4e, 0x4f, 0x50, 0x52, 0x56, 0x57, 0x67, 0x88];
-        const cheese = [0x43, 0x38, 0x3e];
+        const cheese = [0x43, 0x38, 0x3e, 0x5d, 0x09, 0x5e];
 
         stairs.forEach(v => {
             rooms.get(v)!.setVisible(!cheese.includes(currentRoom));

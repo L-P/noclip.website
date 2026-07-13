@@ -18,7 +18,7 @@ export interface Vertex {
     y:      number; // uint16
     z:      number; // uint16
     flags:  number; // uint8
-    colour: number; // uint8
+    color: number; // uint8
     s:      number; // uint16
     t:      number; // uint16
 };
@@ -35,25 +35,25 @@ interface ComputedVertex extends Vertex {
     cb: number; // uint8, color/normal
     ca: number; // uint8, color/normal
 }
-const computedVertexElementsCount = 5 + 4; // no flags/colour in vertex buffer
+const computedVertexElementsCount = 5 + 4; // no flags/color in vertex buffer
 
 // Don't look, I'm ashamed.
 function computedVertexKey(vtx: ComputedVertex): string {
     return [
         vtx.x, vtx.y, vtx.z,
-        vtx.flags, vtx.colour,
+        vtx.flags, vtx.color,
         vtx.s, vtx.t,
         vtx.cr, vtx.cg, vtx.cb, vtx.ca
     ].join(',');
 }
 
-export interface Colour {
+export interface Color {
     r: number; // uint8
     g: number; // uint8
     b: number; // uint8
     a: number; // uint8
 };
-export const colourStructSize = 4;
+export const colorStructSize = 4;
 
 export function loadVertexFromView(view: DataView, offset: number): Vertex {
     return {
@@ -61,7 +61,7 @@ export function loadVertexFromView(view: DataView, offset: number): Vertex {
         y:      view.getInt16(offset + 2),
         z:      view.getInt16(offset + 4),
         flags:  view.getUint8(offset + 6),
-        colour: view.getUint8(offset + 7),
+        color: view.getUint8(offset + 7),
         s:      view.getInt16(offset + 8),
         t:      view.getInt16(offset + 10),
     };
@@ -70,7 +70,7 @@ export function loadVertexFromView(view: DataView, offset: number): Vertex {
 export enum Command {
     G_SPNOOP            = 0x00,
     G_VTX               = 0x04,
-    G_COL               = 0x07,// like  G_VTX but for vertex colours.
+    G_COL               = 0x07,// like  G_VTX but for vertex colors.
     G_TRI4              = 0xB1,
     G_CLEARGEOMETRYMODE = 0xB6,
     G_RDPSETOTHERMODE   = 0xB7,
@@ -322,9 +322,9 @@ function segAddr(addr: number): SegmentAddress {
 // Contains some c/c from PokemonSnap implementation.
 export class Interpreter {
     private vtxSegments: Vertex[][] = [];
-    private colSegments: Colour[][] = [];
+    private colSegments: Color[][] = [];
     private vtxCache: Vertex[] = Array<Vertex>(16);
-    private colCache: Colour[] = [];
+    private colCache: Color[] = [];
     private geometryMode: GeometryMode = 0; // bitflags
 
     private SP_TextureState = new F3DEX.TextureState();
@@ -389,10 +389,10 @@ export class Interpreter {
         }
     }
 
-    public setSegmentColours(segment: Segment, colours: Colour[]): void {
+    public setSegmentColors(segment: Segment, colors: Color[]): void {
         switch(segment) {
             case Segment.BGCol:
-                this.colSegments[segment] = colours;
+                this.colSegments[segment] = colors;
                 break;
             default:
                 throw new Error(`Unexpected segment: ` + hexzero0x(segment));
@@ -417,7 +417,7 @@ export class Interpreter {
                 this.gSPTri4(gfx);
                 break;
             case Command.G_COL:
-                this.gSPColour(gfx);
+                this.gSPColor(gfx);
                 break;
             case Command.G_SETGEOMETRYMODE:
                 this.geometryMode |= gfx.w1;
@@ -511,7 +511,7 @@ export class Interpreter {
 
     // Got conflicting info between obviously wrong comments in the decomp and
     // the port implementation. I'll do what the port does and hope for the best.
-    private gSPColour(gfx: GFX): void {
+    private gSPColor(gfx: GFX): void {
         const src = segAddr(gfx.w1);
         this.colCache = this.colSegments[src.segment].slice(src.address / 4);
     }
@@ -529,7 +529,7 @@ export class Interpreter {
             v.s /= 0x20;
             v.t /= 0x20;
 
-            const col: Colour = this.colCache[v.colour >>> 2];
+            const col: Color = this.colCache[v.color >>> 2];
             if (col !== undefined) {
                 v.cr = col.r / 255.0;
                 v.cg = col.g / 255.0;

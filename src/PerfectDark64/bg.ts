@@ -4,11 +4,11 @@ import { assert, hexzero0x, readString } from "../util";
 import { vec3 } from "gl-matrix";
 
 import {
-    Colour,
+    Color,
     Command,
     GFX,
     Vertex,
-    colourStructSize,
+    colorStructSize,
     gfxStructSize,
     loadVertexFromView,
     vertexStructSize,
@@ -18,7 +18,7 @@ import { Inflater } from "./rom";
 
 /**
  * BGs (assumed to stand for "background geometry") contains the level geometry
- * as packed vertices/colours and display lists in a cascading mess of offsets,
+ * as packed vertices/colors and display lists in a cascading mess of offsets,
  * trees, and lists that accommodate F3DEX and pd64's room->portal->room
  * renderer reminiscing of a simplified BSP renderer.
  * The path to the packed data and display lists is BGRoom->Room->n Block->gdl.
@@ -102,7 +102,7 @@ export class Room {
     // We compute this ourselves, no need to load section 3.
     bbox: AABB;
 
-    colours: Colour[];
+    colors: Color[];
 
     blocks: Block[];
     opaqueRoot: number | undefined; // index into blocks
@@ -128,32 +128,32 @@ export class Room {
 interface RoomGFXDataHeader {
     // Pointers into decompressed roomgfxdata.
     verticesPtr:          number, // uint32
-    coloursPtr:           number, // uint32
+    colorsPtr:           number, // uint32
     opaqueBlocksPtr:      number, // uint32
     translucentBlocksPtr: number, // uint32
 
     lightsIndex:          number, // int16
     numLights:            number, // int16
     numVertices:          number, // int16, computed after loading, we don't use this
-    numColours:           number, // int16, computed after loading, we don't use this
+    numColors:           number, // int16, computed after loading, we don't use this
 }
 const roomGFXDataHeaderStructSize = 24;
 
 function readRoomGFXDataHeader(view: DataView, roomOffset: number): RoomGFXDataHeader {
     let header:RoomGFXDataHeader = {
         verticesPtr:          view.getUint32(0),
-        coloursPtr:           view.getUint32(4),
+        colorsPtr:           view.getUint32(4),
         opaqueBlocksPtr:      view.getUint32(8),
         translucentBlocksPtr: view.getUint32(12),
         lightsIndex:          view.getInt16(16),
         numLights:            view.getInt16(18),
         numVertices:          view.getInt16(20),
-        numColours:           view.getInt16(22),
+        numColors:           view.getInt16(22),
     };
 
     const offset = roomOffset + magicOffset;
     header.verticesPtr          -= header.verticesPtr          === 0 ? 0 : offset;
-    header.coloursPtr           -= header.coloursPtr           === 0 ? 0 : offset;
+    header.colorsPtr           -= header.colorsPtr           === 0 ? 0 : offset;
     header.opaqueBlocksPtr      -= header.opaqueBlocksPtr      === 0 ? 0 : offset;
     header.translucentBlocksPtr -= header.translucentBlocksPtr === 0 ? 0 : offset;
 
@@ -177,7 +177,7 @@ export interface Block {
     // union RoomBlockType.Leaf
     gdlPtr: number; // int32
     verticesPtr: number; // int32
-    coloursPtr: number; // int32
+    colorsPtr: number; // int32
 
     // union RoomBlockType.Parent
     childPtr: number; // int32
@@ -212,7 +212,7 @@ function loadBlock(view: DataView, roomOffset: number, blockOffset: number): Blo
 
         gdlPtr: view.getUint32(8),
         verticesPtr: view.getUint32(12),
-        coloursPtr: view.getUint32(16),
+        colorsPtr: view.getUint32(16),
 
         // Also read the block as if it was a Parent.
         childPtr: view.getUint32(8),
@@ -225,7 +225,7 @@ function loadBlock(view: DataView, roomOffset: number, blockOffset: number): Blo
     ret.nextPtr     -= ret.nextPtr     === 0 ? 0 : offset;
     ret.gdlPtr      -= ret.gdlPtr      === 0 ? 0 : offset;
     ret.verticesPtr -= ret.verticesPtr === 0 ? 0 : offset;
-    ret.coloursPtr  -= ret.coloursPtr  === 0 ? 0 : offset;
+    ret.colorsPtr  -= ret.colorsPtr  === 0 ? 0 : offset;
 
     return ret;
 }
@@ -257,20 +257,20 @@ function loadRoomGFXDataBlocks(header: RoomGFXDataHeader, roomOffset: number, gf
     return ret;
 }
 
-function loadRoomGFXDataColours(
+function loadRoomGFXDataColors(
     header: RoomGFXDataHeader,
     view: DataView,
     room: Room,
-): Colour[] {
-    if (header.coloursPtr === 0) {
+): Color[] {
+    if (header.colorsPtr === 0) {
         return [];
     }
 
     const nextGDL = findNextGDLInRoom(room, 0, findGDLType.Opaque | findGDLType.Translucent);
-    const count = (nextGDL - header.coloursPtr) / colourStructSize;
+    const count = (nextGDL - header.colorsPtr) / colorStructSize;
 
     return Array.from({length: count}, (_, i) => {
-        const offset = header.coloursPtr + (i * colourStructSize);
+        const offset = header.colorsPtr + (i * colorStructSize);
 
         return {
             r: view.getUint8(offset),
@@ -341,7 +341,7 @@ function findNextGDLInBlock(room:Room, block: Block | undefined, start: number, 
 
 function loadRoomGFXDataVertices(header: RoomGFXDataHeader, view: DataView): Vertex[] {
     const ret: Vertex[] = [];
-    const count = (header.coloursPtr - header.verticesPtr) / vertexStructSize;
+    const count = (header.colorsPtr - header.verticesPtr) / vertexStructSize;
 
     for (let i = 0; i < count; i++) {
         const offset = header.verticesPtr + (i * vertexStructSize);
@@ -384,13 +384,13 @@ function loadRooms(
             serializedBlockOffsetMap: [],
             opaqueRoot: undefined,
             translucentRoot: undefined,
-            colours: [],
+            colors: [],
             pos: {
                 x: bgRoom.pos[0],
                 y: bgRoom.pos[1],
                 z: bgRoom.pos[2],
                 flags: 0,
-                colour: 0,
+                color: 0,
                 s: 0,
                 t: 0,
             }
@@ -405,7 +405,7 @@ function loadRooms(
 
         room.opaqueRoot = room.blockOffsetMap.get(gfxDataHeader.opaqueBlocksPtr);
         room.translucentRoot = room.blockOffsetMap.get(gfxDataHeader.translucentBlocksPtr);
-        room.colours = loadRoomGFXDataColours(gfxDataHeader, gfxView, room);
+        room.colors = loadRoomGFXDataColors(gfxDataHeader, gfxView, room);
 
         ret.push(room);
     });

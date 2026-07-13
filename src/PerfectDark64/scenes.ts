@@ -135,7 +135,7 @@ class Scene implements Viewer.SceneGfx {
 
         var interpreter = new Interpreter(this.textureHolder);
         interpreter.setSegmentVertices(Segment.BGVtx, room.vertices);
-        interpreter.setSegmentColours(Segment.BGCol, room.colours);
+        interpreter.setSegmentColors(Segment.BGCol, room.colors);
         let block: Block | undefined = room.blocks[rootIndex];
 
         while (block !== undefined) {

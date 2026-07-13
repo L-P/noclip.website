@@ -46,8 +46,8 @@ export enum Format {
     IA4        = 0x06, // 4-bit grayscale+alpha (3/1)
     I8         = 0x07, // 8-bit grayscale
     I4         = 0x08, // 4-bit grayscale
-    RGBA16_CI8 = 0x09, // 16-bit 5551 paletted colour with 8-bit palette indexes
-    RGBA16_CI4 = 0x0a, // 16-bit 5551 paletted colour with 4-bit palette indexes
+    RGBA16_CI8 = 0x09, // 16-bit 5551 paletted color with 8-bit palette indexes
+    RGBA16_CI4 = 0x0a, // 16-bit 5551 paletted color with 4-bit palette indexes
     IA16_CI8   = 0x0b, // 16-bit 88 paletted greyscale+alpha with 8-bit palette indexes
     IA16_CI4   = 0x0c, // 16-bit 88 paletted greyscale+alpha with 4-bit palette indexes
 }
@@ -112,7 +112,7 @@ function toGBILUTMode(format: Format): TextureLUT {
     }
 }
 
-// > For non-paletted images, size in decimal of each colour channel.
+// > For non-paletted images, size in decimal of each color channel.
 // > Eg. 32 means each channel can store up to 32 values (5-bits per channel).
 // > For paletted images, same thing but for the palette indices instead.
 // - pd64 decomp

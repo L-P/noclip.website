@@ -34,7 +34,7 @@ function writeBGSegments(rom: ROM) {
             `${seg.rooms.length} rooms,`,
             seg.rooms.reduce((acc, room) => acc + room.blocks.length, 0), "blocks,",
             seg.rooms.reduce((acc, room) => acc + room.vertices.length, 0), "vertices,",
-            seg.rooms.reduce((acc, room) => acc + room.colours.length, 0), "colours,",
+            seg.rooms.reduce((acc, room) => acc + room.colors.length, 0), "colors,",
             toMiB(buf.byteLength), "MiB",
         );
     });

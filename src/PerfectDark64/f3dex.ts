@@ -55,6 +55,15 @@ export interface Color {
 };
 export const colorStructSize = 4;
 
+export function loadColorFromView(view: DataView, offset: number): Color {
+    return {
+        r:  view.getUint8(offset + 0),
+        g:  view.getUint8(offset + 1),
+        b:  view.getUint8(offset + 2),
+        a:  view.getUint8(offset + 3),
+    };
+}
+
 export function loadVertexFromView(view: DataView, offset: number): Vertex {
     return {
         x:      view.getInt16(offset),

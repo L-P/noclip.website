@@ -2,7 +2,7 @@ import ArrayBufferSlice from "../../ArrayBufferSlice";
 import { assert, hexzero0x, hexzero } from "../../util";
 import { inflateRawSync } from "zlib";
 import { writeFileSync, readdirSync, mkdirSync } from "fs";
-import { stages } from "../stages";
+import { stages, StageID } from "../stages";
 
 import ROM from "../rom";
 import type { Inflater }  from "../rom";
@@ -36,6 +36,27 @@ function writeBGSegments(rom: ROM) {
             seg.rooms.reduce((acc, room) => acc + room.vertices.length, 0), "vertices,",
             seg.rooms.reduce((acc, room) => acc + room.colors.length, 0), "colors,",
             toMiB(buf.byteLength), "MiB",
+        );
+    });
+}
+
+function writeSetups(rom: ROM) {
+    const outBase = pathBaseOut + "setups/";
+    mkdirSync(outBase, {recursive: true});
+
+    stages.forEach(v => {
+        if (v.setupPath === "") {
+            console.warn(`stage ${StageID[v.id]} has no setup path`);
+            return;
+        }
+
+        const data = decompress(rom.openFile(v.setupPath));
+        const outPath = [outBase, v.setupPath].join("");
+        writeFileSync(outPath, data.createTypedArray(Uint8Array));
+
+        console.info(
+            `Wrote setup: ${outPath},`,
+            toMiB(data.byteLength), "MiB",
         );
     });
 }
@@ -116,6 +137,7 @@ function main() {
     const rom = new ROM(pathROM, decompress);
     writeBGSegments(rom);
     writeTextureData(rom);
+    writeSetups(rom);
 }
 
 const compressedMagicHeader = 0x1173;

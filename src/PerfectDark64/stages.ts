@@ -54,7 +54,7 @@ export interface Stage {
 export const stages: Array<Stage> = [
     {id: StageID.AirBase,              bgPath: "bgdata/bg_cave.seg", skyRoom: 0x00, skyColor: colorNewFromRGBA8(0x001040ff)},
     {id: StageID.AirForceOne,          bgPath: "bgdata/bg_rit.seg",  skyRoom: 0x00, skyColor: colorNewFromRGBA8(0x001040ff)},
-    {id: StageID.AttackShip,           bgPath: "bgdata/bg_lee.seg",  skyRoom: 0x00, skyColor: OpaqueBlack},
+    {id: StageID.AttackShip,           bgPath: "bgdata/bg_lee.seg",  skyRoom: 0x71, skyColor: OpaqueBlack},
     {id: StageID.CITraining,           bgPath: "bgdata/bg_dish.seg", skyRoom: 0x00, skyColor: colorNewFromRGBA8(0x65b2ffff)},
     {id: StageID.Chicago,              bgPath: "bgdata/bg_pete.seg", skyRoom: 0x00, skyColor: OpaqueBlack},
     {id: StageID.G5Building,           bgPath: "bgdata/bg_depo.seg", skyRoom: 0x00, skyColor: OpaqueBlack},

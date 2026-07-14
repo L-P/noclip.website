@@ -212,7 +212,7 @@ export default class ROM {
                 (i < this.textureList.length - 1) &&
                 (entry.dataOffset === this.textureList[i+1].dataOffset)
             ) {
-                console.info(`textureList entry #${i} has no data`);
+                console.warn(`textureList entry #${i} has no data`);
                 // Don't return, we need the indices to match textureList.
                 // We'll have an empty file, it's OK.
             }

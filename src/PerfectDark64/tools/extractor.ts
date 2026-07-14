@@ -20,27 +20,26 @@ function unique(input: Array<any>): Array<any> {
 
 function writeBGSegments(rom: ROM) {
     const bgSegmentPaths = unique(stages.map(stage => stage.bgPath));
-
-    mkdirSync(pathBaseOut + "bgdata", {recursive: true});
-
+    let size = 0;
     bgSegmentPaths.forEach((path) => {
         const seg = new BGSegment(rom.openFile(path), decompress);
         const outPath = [pathBaseOut, path, ".json"].join("");
         const buf = Buffer.from(JSON.stringify(seg));
         writeFileSync(outPath, buf);
 
-        console.info(
-            `Wrote BG segment: ${outPath},`,
-            `${seg.rooms.length} rooms,`,
-            seg.rooms.reduce((acc, room) => acc + room.blocks.length, 0), "blocks,",
-            seg.rooms.reduce((acc, room) => acc + room.vertices.length, 0), "vertices,",
-            seg.rooms.reduce((acc, room) => acc + room.colors.length, 0), "colors,",
-            toMiB(buf.byteLength), "MiB",
-        );
+        size += buf.byteLength
     });
+
+    console.info(
+        "Wrote", bgSegmentPaths.length, "BG segments,",
+        toMiB(size), "MiB",
+    );
 }
 
 function writePads(rom: ROM) {
+    let count = 0;
+    let size = 0;
+
     stages.forEach(v => {
         if (v.padsPath === "") {
             console.warn(`stage ${StageID[v.id]} has no pads path`);
@@ -51,16 +50,18 @@ function writePads(rom: ROM) {
         const outPath = [pathBaseOut, v.padsPath].join("");
         writeFileSync(outPath, data.createTypedArray(Uint8Array));
 
-        console.info(
-            `Wrote pads: ${outPath},`,
-            toMiB(data.byteLength), "MiB",
-        );
+        count++;
+        size += data.byteLength;
     })
+
+    console.info("Wrote", count, "pads,", toMiB(size), "MiB");
 }
 
 function writeSetups(rom: ROM) {
     const outBase = pathBaseOut + "setups/";
-    mkdirSync(outBase, {recursive: true});
+
+    let count = 0;
+    let size = 0;
 
     stages.forEach(v => {
         if (v.setupPath === "") {
@@ -72,11 +73,11 @@ function writeSetups(rom: ROM) {
         const outPath = [outBase, v.setupPath].join("");
         writeFileSync(outPath, data.createTypedArray(Uint8Array));
 
-        console.info(
-            `Wrote setup: ${outPath},`,
-            toMiB(data.byteLength), "MiB",
-        );
+        count++;
+        size += data.byteLength;
     });
+
+    console.info("Wrote", count, "setups,", toMiB(size), "MiB");
 }
 
 function toMiB(v:number): string {
@@ -141,22 +142,27 @@ function writeTextureData(rom: ROM) {
     writeFileSync(binPath, bigBin);
 
     console.info(
-        `Wrote texture data: ${outBase}*.bin,`,
+        "Wrote texture data:", binPath,
         meta.length, "/", rom.textureData.length, "textures,",
         toMiB(bigBin.byteLength), "MiB",
     );
 
     const metaPath = pathBaseOut + "textures.json";
-    writeFileSync(metaPath, Buffer.from(JSON.stringify(meta)));
-    console.info(`Wrote texture index: ${metaPath}`);
+    const buf = Buffer.from(JSON.stringify(meta));
+    writeFileSync(metaPath, buf);
+    console.info("Wrote texture index:", metaPath+",", toMiB(buf.byteLength), "MiB");
 }
 
 function main() {
     const rom = new ROM(pathROM, decompress);
+
+    mkdirSync(pathBaseOut + "bgdata", {recursive: true});
+    mkdirSync(pathBaseOut + "setups", {recursive: true});
+
     writeBGSegments(rom);
-    writeTextureData(rom);
     writePads(rom);
     writeSetups(rom);
+    writeTextureData(rom);
 }
 
 const compressedMagicHeader = 0x1173;

@@ -1,6 +1,151 @@
 import ArrayBufferSlice from "../ArrayBufferSlice";
+import { AABB } from "../Geometry";
+import { vec3 } from "gl-matrix";
 import { assert, hexzero0x } from "../util";
+
 import { Color, loadColorFromView } from "./f3dex";
+
+export interface Pad {
+    pos: vec3;
+    look: vec3;
+    up: vec3;
+    normal: vec3;
+    bbox: AABB;
+    room: number;
+    flags: number;
+    liftNum: number;
+    // unk52: number;
+}
+const padStructSize = 0x54;
+
+interface PadsFileHeader {
+    numpads:         number;   // s32
+    numcovers:       number;   // s32
+    waypointsoffset: number;   // s32
+    waygroupsoffset: number;   // s32
+    coversoffset:    number;   // s32
+    offsets:         number[]; // u16[numpads]
+}
+
+export function loadPadsFromBinary(data: ArrayBufferSlice): Pad[] {
+    var ret: Pad[] = [];
+    const view = data.createDataView();
+    const numPads = view.getInt32(0x00);
+
+    for (let i = 0; i < numPads; i++) {
+        let offset = view.getUint16(0x14 + (i * 2));
+        ret.push(padFromView(view, offset));
+    }
+
+    return ret;
+}
+
+function padFromView(view: DataView, offset: number): Pad {
+    const header = view.getUint32(offset);
+    offset += 4;
+
+    const flags = header >>> 14;
+    const room = (header >>> 4) & 0x3ff;
+    const liftNum = header & 0xf;
+
+    let pos: vec3;
+    if (flags & PadFlag.INTPOS) {
+        pos = vec3.fromValues(
+            view.getInt16(offset + 0x00),
+            view.getInt16(offset + 0x02),
+            view.getInt16(offset + 0x04),
+        );
+        offset += 8;
+    } else {
+        pos = vec3.fromValues(
+            view.getFloat32(offset + 0x00),
+            view.getFloat32(offset + 0x04),
+            view.getFloat32(offset + 0x08),
+        );
+        offset += 12;
+    }
+
+    let up: vec3;
+	if (!!(flags & (PadFlag.UPALIGNTOX | PadFlag.UPALIGNTOY | PadFlag.UPALIGNTOZ))) {
+        const sign = (flags & PadFlag.UPALIGNINVERT) ? -1 : 1;
+        up = vec3.fromValues(
+            (flags & PadFlag.UPALIGNTOX) ? sign : 0,
+            (flags & PadFlag.UPALIGNTOY) ? sign : 0,
+            (flags & PadFlag.UPALIGNTOZ) ? sign : 0,
+        );
+    } else {
+        up = vec3.fromValues(
+            view.getFloat32(offset + 0x00),
+            view.getFloat32(offset + 0x04),
+            view.getFloat32(offset + 0x08),
+        );
+        offset += 12;
+    }
+
+    let look: vec3;
+	if (!!(flags & (PadFlag.LOOKALIGNTOX | PadFlag.LOOKALIGNTOY | PadFlag.LOOKALIGNTOZ))) {
+        const sign = (flags & PadFlag.LOOKALIGNINVERT) ? -1 : 1;
+        look = vec3.fromValues(
+            (flags & PadFlag.LOOKALIGNTOX) ? sign : 0,
+            (flags & PadFlag.LOOKALIGNTOY) ? sign : 0,
+            (flags & PadFlag.LOOKALIGNTOZ) ? sign : 0,
+        );
+    } else {
+        look = vec3.fromValues(
+            view.getFloat32(offset + 0x00),
+            view.getFloat32(offset + 0x04),
+            view.getFloat32(offset + 0x08),
+        );
+        offset += 12;
+    }
+
+    const normal = vec3.fromValues(
+        up[1] * look[2] - look[1] * up[2],
+        up[2] * look[0] - look[2] * up[0],
+        up[0] * look[1] - look[0] * up[1],
+    );
+
+    let bbox: AABB;
+    if (flags & PadFlag.HASBBOXDATA) {
+        bbox = new AABB(
+            view.getFloat32(offset + 0x00),
+            view.getFloat32(offset + 0x08),
+            view.getFloat32(offset + 0x10),
+            view.getFloat32(offset + 0x04),
+            view.getFloat32(offset + 0x0c),
+            view.getFloat32(offset + 0x14),
+        );
+        offset += 6 * 4;
+    } else {
+        bbox = new AABB(
+            -100, -100, -100,
+            100, 100, 100,
+        );
+    }
+
+    return {flags, room, liftNum, pos, look, up, normal, bbox};
+}
+
+export enum PadFlag {
+    INTPOS          = 0x0001,
+    UPALIGNTOX      = 0x0002,
+    UPALIGNTOY      = 0x0004,
+    UPALIGNTOZ      = 0x0008,
+    UPALIGNINVERT   = 0x0010,
+    LOOKALIGNTOX    = 0x0020,
+    LOOKALIGNTOY    = 0x0040,
+    LOOKALIGNTOZ    = 0x0080,
+    LOOKALIGNINVERT = 0x0100,
+    HASBBOXDATA     = 0x0200,
+    AIWAITLIFT      = 0x0400,
+    AIONLIFT        = 0x0800,
+    AIWALKDIRECT    = 0x1000,
+    AIDROP          = 0x2000,
+    AICROUCH        = 0x4000,
+    AIIGNOREY       = 0x8000,
+    AIDUCK          = 0x10000,
+    AIBOTINUSE      = 0x20000,
+}
 
 // A "setup" is a bunch of data/bytecode that contains the gameplay logic for a
 // level and how all props are placed and configured.

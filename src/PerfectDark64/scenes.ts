@@ -17,13 +17,13 @@ import { makeBackbufferDescSimple, makeAttachmentClearDescriptor, opaqueBlackFul
 import { setSortKeyTranslucentDepth, setSortKeyDepth, makeSortKey, GfxRendererLayer, GfxRenderInst, GfxRenderInstList, gfxRenderInstCompareSortKey, GfxRenderInstExecutionOrder } from "../gfx/render/GfxRenderInstManager";
 import { vec3, mat4 } from "gl-matrix";
 import { setAttachmentStateSimple } from '../gfx/helpers/GfxMegaStateDescriptorHelpers';
-import { drawScreenSpaceText, drawWorldSpaceText, getDebugOverlayCanvas2D } from '../DebugJunk'
+import { drawWorldSpaceAABB, drawWorldSpaceLocator, drawScreenSpaceText, drawWorldSpaceText, getDebugOverlayCanvas2D } from '../DebugJunk'
 
 import * as tex from "./tex";
 import { NumTextures } from "./rom";
 import { Program } from "./shaders";
 import { RoomBlockType, Block, BGSegment, Room} from "./bg";
-import { Setup } from "./setup";
+import { PadFlag, Pad, Setup, loadPadsFromBinary } from "./setup";
 import { Stage, StageID, stages } from "./stages";
 import { toReadonlyVec3, Vertex, GFX, Segment, Mesh, Interpreter } from "./f3dex";
 import { updateHarcodedHacks } from './hacks';
@@ -68,6 +68,7 @@ class Scene implements Viewer.SceneGfx {
 
     private shouldEnableHardcodedHacks: boolean = true;
     private shouldDisplayRoomIDs: boolean = false;
+    private shouldDisplayPadBoundingBoxes: boolean = false;
     private shouldEnableTextures: boolean = true;
     private shouldEnableVertexColors: boolean = true;
     private shouldRenderSkybox: boolean = true;
@@ -80,6 +81,7 @@ class Scene implements Viewer.SceneGfx {
         private stage: Stage,
         seg: BGSegment,
         setup: Setup,
+        private pads: Pad[],
     ) {
         this.renderHelper = new GfxRenderHelper(device);
         const cache = this.renderHelper.renderCache;
@@ -227,6 +229,7 @@ class Scene implements Viewer.SceneGfx {
         if (this.shouldEnableHardcodedHacks) {
             updateHarcodedHacks(cameraPos, currentRoom, this.stage.id, this.rooms);
         }
+
         if (this.shouldDisplayRoomIDs) {
             drawScreenSpaceText(
                 getDebugOverlayCanvas2D(),
@@ -238,6 +241,27 @@ class Scene implements Viewer.SceneGfx {
                     hexzero0x(currentRoom || 0, 2),
                 ].join(', '),
             );
+        }
+
+        if (this.shouldDisplayPadBoundingBoxes) {
+            this.pads.forEach(pad => {
+                const scratch = pad.bbox.clone();
+                scratch.offset(scratch, pad.pos);
+
+                if (pad.flags & PadFlag.HASBBOXDATA) {
+                    drawWorldSpaceAABB(
+                        getDebugOverlayCanvas2D(),
+                        viewerInput.camera.clipFromWorldMatrix,
+                        scratch
+                    );
+                } else {
+                    drawWorldSpaceLocator(
+                        getDebugOverlayCanvas2D(),
+                        viewerInput.camera.clipFromWorldMatrix,
+                        pad.pos,
+                    );
+                }
+            });
         }
     }
 
@@ -460,6 +484,12 @@ class Scene implements Viewer.SceneGfx {
         };
         panel.contents.appendChild(displayRoomIDs.elem);
 
+        const displayPadBoundingBoxes = new UI.Checkbox('Display pads origins/bboxes', this.shouldDisplayPadBoundingBoxes);
+        displayPadBoundingBoxes.onchanged = () => {
+            this.shouldDisplayPadBoundingBoxes = displayPadBoundingBoxes.checked;
+        };
+        panel.contents.appendChild(displayPadBoundingBoxes.elem);
+
         const enableTexturesCheckbox = new UI.Checkbox('Enable textures', this.shouldEnableTextures);
         enableTexturesCheckbox.onchanged = () => {
             this.shouldEnableTextures = enableTexturesCheckbox.checked;
@@ -511,7 +541,8 @@ class SceneDesc implements Viewer.SceneDesc {
         }
 
         const bgJSON = sceneContext.dataFetcher.fetchData([pathBase, stage.bgPath, ".json"].join(""));
-        const setupBin =sceneContext.dataFetcher.fetchData([pathBase, "setups/", stage.setupPath].join(""));
+        const setupBin = sceneContext.dataFetcher.fetchData([pathBase, "setups/", stage.setupPath].join(""));
+        const padsBin = sceneContext.dataFetcher.fetchData([pathBase, stage.padsPath].join(""));
 
         console.groupCollapsed('loadViewerTextures');
         const textureHolder = await loadViewerTextures(sceneContext, device);
@@ -523,6 +554,7 @@ class SceneDesc implements Viewer.SceneDesc {
             stage,
             BGSegment.fromJSON(await bgJSON),
             Setup.fromBinary(await setupBin),
+            loadPadsFromBinary(await padsBin),
         );
     }
 }

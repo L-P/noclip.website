@@ -18,7 +18,7 @@ export interface Vertex {
     y:      number; // uint16
     z:      number; // uint16
     flags:  number; // uint8
-    color: number; // uint8
+    color:  number; // uint8
     s:      number; // uint16
     t:      number; // uint16
 };

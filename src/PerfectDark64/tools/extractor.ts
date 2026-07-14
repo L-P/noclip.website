@@ -40,6 +40,24 @@ function writeBGSegments(rom: ROM) {
     });
 }
 
+function writePads(rom: ROM) {
+    stages.forEach(v => {
+        if (v.padsPath === "") {
+            console.warn(`stage ${StageID[v.id]} has no pads path`);
+            return;
+        }
+
+        const data = decompress(rom.openFile(v.padsPath));
+        const outPath = [pathBaseOut, v.padsPath].join("");
+        writeFileSync(outPath, data.createTypedArray(Uint8Array));
+
+        console.info(
+            `Wrote pads: ${outPath},`,
+            toMiB(data.byteLength), "MiB",
+        );
+    })
+}
+
 function writeSetups(rom: ROM) {
     const outBase = pathBaseOut + "setups/";
     mkdirSync(outBase, {recursive: true});
@@ -137,6 +155,7 @@ function main() {
     const rom = new ROM(pathROM, decompress);
     writeBGSegments(rom);
     writeTextureData(rom);
+    writePads(rom);
     writeSetups(rom);
 }
 

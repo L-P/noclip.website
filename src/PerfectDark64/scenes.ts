@@ -10,7 +10,7 @@ import { GfxrAttachmentSlot } from "../gfx/render/GfxRenderGraph";
 import { IS_DEVELOPMENT } from "../BuildVersion";
 import { TextureLUT, parseTLUT, getTLUTSize, ImageFormat, ImageSize } from "../Common/N64/Image";
 import { SceneContext } from "../SceneBase";
-import { computeViewMatrix, computeViewMatrixSkybox } from '../Camera.js';
+import { computeViewMatrix, computeViewMatrixSkybox, CameraController } from '../Camera.js';
 import { fillMatrix4x2, fillMatrix4x3, fillMatrix4x4, fillVec4 } from "../gfx/helpers/UniformBufferHelpers";
 import { assert, hexzero0x } from "../util";
 import { makeBackbufferDescSimple, makeAttachmentClearDescriptor, opaqueBlackFullClearRenderPassDescriptor, standardFullClearRenderPassDescriptor } from '../gfx/helpers/RenderGraphHelpers.js';
@@ -86,6 +86,10 @@ class Scene implements Viewer.SceneGfx {
 
         this.skyColor = makeAttachmentClearDescriptor(stage.skyColor);
         this.rooms = this.buildSceneRooms(device, seg);
+    }
+
+    public adjustCameraController(c: CameraController) {
+        c.setSceneMoveSpeedMult(0.25);
     }
 
     private createProgram(): Program {

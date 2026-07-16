@@ -151,14 +151,28 @@ export enum PadFlag {
 // level and how all props are placed and configured.
 export class Setup {
     public doors: Door[] = [];
+    public basic: Basic[] = [];
 
-    private addPropFromView(view: DataView, offset: number): void {
+    private addPropFromView(
+        view: DataView,
+        offset: number,
+        state: SetupState,
+        pads: Pad[],
+    ): void {
         const type = view.getUint8(offset + 3);
 
         switch (type) {
-            case ObjectType.DOOR:
+            case ObjectType.BASIC:
                 const obj = defaultObjectFromView(view, offset);
-                this.doors.push({obj});
+                if (obj.pad < 0) {
+                    break;
+                }
+
+                const pad = pads[obj.pad];
+                this.basic.push({obj, pad});
+                break;
+            case ObjectType.DOOR:
+                this.doors.push(createDoorFromView(view, offset, state, pads));
                 break;
             default:
                 // Any prop we don't care about is a NOOP.
@@ -166,20 +180,29 @@ export class Setup {
         }
     }
 
-    public static fromBinary(data: ArrayBufferSlice): Setup {
+    public static fromBinary(data: ArrayBufferSlice, pads: Pad[]): Setup {
         const setup = new Setup();
+        const state: SetupState = {
+            doorScale: 1.0,
+        };
 
         const view = data.createDataView();
         const header = setupHeaderFromView(view);
         let offset = header.props;
 
+        loop:
         for (;;) {
             const type = view.getUint8(offset + 3);
-            if (type === ObjectType.END) {
-                break;
+
+            switch (type) {
+                case ObjectType.END:
+                    break loop;
+                case ObjectType.DOORSCALE:
+                    state.doorScale = view.getInt32(offset + 4) / 65536;
+                    break;
             }
 
-            setup.addPropFromView(view, offset);
+            setup.addPropFromView(view, offset, state, pads);
 
             offset += objectSize(type);
         }
@@ -188,8 +211,35 @@ export class Setup {
     }
 }
 
+interface SetupState {
+    doorScale: number;
+}
+
+function createDoorFromView(
+    view: DataView,
+    offset: number,
+    state: SetupState,
+    pads: Pad[],
+): Door {
+    const obj = defaultObjectFromView(view, offset);
+    const pad = pads[obj.pad];
+
+    if (state.doorScale !== 1.0) {
+        pad.bbox.min[0] *= state.doorScale;
+        pad.bbox.max[0] *= state.doorScale;
+    }
+
+    return {obj, pad};
+}
+
 interface Door {
     obj: DefaultObject;
+    pad: Pad;
+}
+
+interface Basic {
+    obj: DefaultObject;
+    pad: Pad;
 }
 
 interface DefaultObject {

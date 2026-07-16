@@ -80,7 +80,7 @@ class Scene implements Viewer.SceneGfx {
         public textureHolder: tex.TextureListHolder,
         private stage: Stage,
         seg: BGSegment,
-        setup: Setup,
+        private setup: Setup,
         private pads: Pad[],
     ) {
         this.renderHelper = new GfxRenderHelper(device);
@@ -548,13 +548,15 @@ class SceneDesc implements Viewer.SceneDesc {
         const textureHolder = await loadViewerTextures(sceneContext, device);
         console.groupEnd();
 
+        const pads = loadPadsFromBinary(await padsBin);
+
         return new Scene(
             device,
             textureHolder,
             stage,
             BGSegment.fromJSON(await bgJSON),
-            Setup.fromBinary(await setupBin),
-            loadPadsFromBinary(await padsBin),
+            Setup.fromBinary(await setupBin, pads),
+            pads,
         );
     }
 }

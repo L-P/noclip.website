@@ -15,7 +15,7 @@ import { fillMatrix4x2, fillMatrix4x3, fillMatrix4x4, fillVec4 } from "../gfx/he
 import { assert, hexzero0x } from "../util";
 import { makeBackbufferDescSimple, makeAttachmentClearDescriptor, opaqueBlackFullClearRenderPassDescriptor, standardFullClearRenderPassDescriptor } from '../gfx/helpers/RenderGraphHelpers.js';
 import { setSortKeyTranslucentDepth, setSortKeyDepth, makeSortKey, GfxRendererLayer, GfxRenderInst, GfxRenderInstList, gfxRenderInstCompareSortKey, GfxRenderInstExecutionOrder } from "../gfx/render/GfxRenderInstManager";
-import { vec3, mat4 } from "gl-matrix";
+import { quat, vec3, mat4 } from "gl-matrix";
 import { setAttachmentStateSimple } from '../gfx/helpers/GfxMegaStateDescriptorHelpers';
 import { drawWorldSpaceAABB, drawWorldSpaceLocator, drawScreenSpaceText, drawWorldSpaceText, getDebugOverlayCanvas2D } from '../DebugJunk'
 
@@ -92,6 +92,21 @@ class Scene implements Viewer.SceneGfx {
 
     public adjustCameraController(c: CameraController) {
         c.setSceneMoveSpeedMult(0.25);
+    }
+
+    public getDefaultWorldMatrix(dst: mat4) {
+        if (this.setup.spawn === undefined) {
+            console.warn("level setup had no spawn position");
+            return;
+        }
+
+        const pos = vec3.clone(this.setup.spawn.pos);
+        pos[1] += 64; // arbitrary height
+
+        const target = vec3.create();
+        vec3.add(target, pos, this.setup.spawn.look);
+
+        mat4.targetTo(dst, pos, target, this.setup.spawn.up);
     }
 
     private createProgram(): Program {

@@ -152,6 +152,7 @@ export enum PadFlag {
 export class Setup {
     public doors: Door[] = [];
     public basic: Basic[] = [];
+    public spawn?: Pad;
 
     private addPropFromView(
         view: DataView,
@@ -182,32 +183,52 @@ export class Setup {
 
     public static fromBinary(data: ArrayBufferSlice, pads: Pad[]): Setup {
         const setup = new Setup();
+        const view = data.createDataView();
+        const header = setupHeaderFromView(view);
+
+        setup.loadPropsFromView(view, header.props, pads);
+        setup.loadIntroFromView(view, header.intro, pads);
+
+        return setup;
+    }
+
+    private loadIntroFromView(view: DataView, offset: number, pads: Pad[]): void {
+        for (;;) {
+            const cmd = view.getInt32(offset);
+
+            switch(cmd) {
+                case IntroCommand.END:
+                    return;
+                case IntroCommand.SPAWN:
+                    const padNum = view.getInt32(offset + 4);
+                    this.spawn = pads[padNum];
+                    break;
+            }
+
+            offset += introCommandSize(cmd) * 4;
+        }
+    }
+
+    private loadPropsFromView(view: DataView, offset: number, pads: Pad[]): void {
         const state: SetupState = {
             doorScale: 1.0,
         };
 
-        const view = data.createDataView();
-        const header = setupHeaderFromView(view);
-        let offset = header.props;
-
-        loop:
         for (;;) {
             const type = view.getUint8(offset + 3);
 
             switch (type) {
                 case ObjectType.END:
-                    break loop;
+                    return;
                 case ObjectType.DOORSCALE:
                     state.doorScale = view.getInt32(offset + 4) / 65536;
                     break;
             }
 
-            setup.addPropFromView(view, offset, state, pads);
+            this.addPropFromView(view, offset, state, pads);
 
             offset += objectSize(type);
         }
-
-        return setup;
     }
 }
 
@@ -322,6 +343,7 @@ function objectSize(type: ObjectType): number {
         case ObjectType.TANK:                    return 32*4;
         case ObjectType.TINTEDGLASS:             return 0x68;
         case ObjectType.WEAPON:                  return 0x68;
+        case ObjectType.MULTIAMMOCRATE:          return 0xA8;
     }
 
     throw new Error(["unhandled type:", hexzero0x(type, 2), ObjectType[type]].join(" "));
@@ -388,6 +410,36 @@ function setupHeaderFromView(view: DataView): setupHeader {
         paths:     view.getUint32(20),
         aiLists:   view.getUint32(24),
     };
+}
+
+enum IntroCommand {
+    SPAWN        = 0,
+    WEAPON       = 1,
+    AMMO         = 2,
+    OUTFIT       = 5,
+    WATCHTIME    = 7,
+    CREDITOFFSET = 8,
+    CASE         = 9,
+    CASERESPAWN  = 10,
+    HILL         = 11,
+    END          = 12,
+}
+
+function introCommandSize(cmd: IntroCommand): number {
+    switch(cmd) {
+        case IntroCommand.END:          return 1;
+        case IntroCommand.HILL:
+        case IntroCommand.OUTFIT:       return 2;
+        case IntroCommand.CASE:
+        case IntroCommand.CASERESPAWN:
+        case IntroCommand.SPAWN:        return 3;
+        case IntroCommand.WEAPON:
+        case IntroCommand.AMMO:
+        case IntroCommand.WATCHTIME:
+        case IntroCommand.CREDITOFFSET: return 4;
+    }
+
+    throw new Error(`unhandled intro command: ${hexzero0x(cmd, 2)}`);
 }
 
 enum ObjectType {

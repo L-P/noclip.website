@@ -97,7 +97,7 @@ function inflateLookup_RGBA32(
     let srcOffset = 0;
     for (let y = 0; y < texture.height; y++) {
         for (let x = 0; x < texture.width; x++) {
-            let value = lookup32[src8[srcOffset + x]];
+            let value: number;
             if (numColors <= 256) {
                 value = lookup32[src8[srcOffset + x]];
             } else {
@@ -136,7 +136,7 @@ function inflateLookup_RGBA16(
     let srcOffset = 0;
     for (let y = 0; y < texture.height; y++) {
         for (let x = 0; x < texture.width; x++) {
-            let value = 0;
+            let value: number;
             if (numColors <= 256) {
                 value = lookup8[src8[srcOffset + x] * 2];
             } else {

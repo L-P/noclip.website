@@ -1,6 +1,5 @@
 import ArrayBufferSlice from "../ArrayBufferSlice";
 import { AABB } from "../Geometry";
-import { assert, hexzero0x, readString } from "../util";
 import { vec3 } from "gl-matrix";
 
 import {
@@ -140,15 +139,15 @@ interface RoomGFXDataHeader {
 const roomGFXDataHeaderStructSize = 24;
 
 function readRoomGFXDataHeader(view: DataView, roomOffset: number): RoomGFXDataHeader {
-    let header:RoomGFXDataHeader = {
+    const header:RoomGFXDataHeader = {
         verticesPtr:          view.getUint32(0),
-        colorsPtr:           view.getUint32(4),
+        colorsPtr:            view.getUint32(4),
         opaqueBlocksPtr:      view.getUint32(8),
         translucentBlocksPtr: view.getUint32(12),
         lightsIndex:          view.getInt16(16),
         numLights:            view.getInt16(18),
         numVertices:          view.getInt16(20),
-        numColors:           view.getInt16(22),
+        numColors:            view.getInt16(22),
     };
 
     const offset = roomOffset + magicOffset;
@@ -189,7 +188,7 @@ export interface Block {
 const roomBlockStructSize = 20
 
 function loadBlockGDLs(view: DataView): GFX[] {
-    var ret: GFX[] = [];
+    const ret: GFX[] = [];
 
     for (let i = 0; ; i += gfxStructSize) {
         const gfx = GFX.readFromView(view, i);
@@ -204,7 +203,7 @@ function loadBlockGDLs(view: DataView): GFX[] {
 }
 
 function loadBlock(view: DataView, roomOffset: number, blockOffset: number): Block {
-    let ret: Block = {
+    const ret: Block = {
         offset: blockOffset,
 
         type: view.getUint8(0),
@@ -232,7 +231,6 @@ function loadBlock(view: DataView, roomOffset: number, blockOffset: number): Blo
 
 function loadRoomGFXDataBlocks(header: RoomGFXDataHeader, roomOffset: number, gfx: ArrayBufferSlice): Block[] {
     const ret: Block[] = [];
-    let offset = roomGFXDataHeaderStructSize;
     let end = header.verticesPtr;
 
     // The first entry is not skipped for a change.
@@ -326,11 +324,12 @@ function findNextGDLInBlock(room:Room, block: Block | undefined, start: number, 
                 }
                 block = room.blockAtOffset(block.nextPtr);
                 break;
-            case RoomBlockType.Parent:
+            case RoomBlockType.Parent: {
                 const tmp = findNextGDLInBlock(room, room.blockAtOffset(block.childPtr), start, end);
                 block = room.blockAtOffset(block.nextPtr);
                 end = tmp;
                 break;
+            }
             default:
                 return end;
         }
@@ -372,10 +371,10 @@ function loadRooms(
         const gfxView = gfx.createDataView();
         const gfxDataHeader = readRoomGFXDataHeader(gfxView, bgRoom.roomOffset);
         const vertices = loadRoomGFXDataVertices(gfxDataHeader, gfxView);
-        let bbox = new AABB();
+        const bbox = new AABB();
         bbox.setFromPoints(vertices.map(v => toReadonlyVec3(v)));
 
-        let room = new Room({
+        const room = new Room({
             number: i,
             vertices: vertices,
             bbox: bbox,
@@ -462,10 +461,10 @@ export class BGSegment {
     }
 
     static fromJSON(buffer: ArrayBufferSlice): BGSegment {
-        let ret = JSON.parse(new TextDecoder().decode(buffer.arrayBuffer));
+        const ret = JSON.parse(new TextDecoder().decode(buffer.arrayBuffer));
 
-        ret.rooms = ret.rooms.map((props:any) => {
-            let room = new Room(props);
+        ret.rooms = ret.rooms.map((props:Partial<Room>) => {
+            const room = new Room(props);
 
             room.blockOffsetMap = new Map<number, number>(
                 room.serializedBlockOffsetMap.map(entry => {

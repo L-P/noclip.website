@@ -3,7 +3,6 @@ import * as RDP from "../Common/N64/RDP";
 import { AABB } from "../Geometry";
 import { GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxCullMode, GfxDevice, GfxFormat, GfxInputLayout, GfxTexture, GfxVertexBufferFrequency, GfxWrapMode, } from "../gfx/platform/GfxPlatform";
 import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
-import { ImageFormat, ImageSize } from "../Common/N64/Image";
 import { ReadonlyVec3, vec4, mat4 } from "gl-matrix";
 import { calcTextureMatrixFromRSPState } from '../Common/N64/RSP.js';
 import { createBufferFromData } from "../gfx/helpers/BufferHelpers";
@@ -383,7 +382,7 @@ export class Interpreter {
     public build(device: GfxDevice, cache: GfxRenderCache): Mesh[] {
         this.flush();
 
-        var ret: Mesh[] = [];
+        const ret: Mesh[] = [];
         this.meshes.forEach(v => ret.push(v.buildMesh(device, cache)));
         return ret.filter(v => v.isValid());
     }
@@ -458,7 +457,7 @@ export class Interpreter {
 
             case Command.G_TEXTURE: {
                 const level = (gfx.w0 >>> 11) & 0x07;
-                let tile = (gfx.w0 >>> 8) & 0x07;
+                const tile = (gfx.w0 >>> 8) & 0x07;
                 const on = !!((gfx.w0 >>> 0) & 0x7F);
                 const s = (gfx.w1 >>> 16) & 0xFFFF;
                 const t = (gfx.w1 >>> 0) & 0xFFFF;
@@ -497,9 +496,11 @@ export class Interpreter {
             case Command.G_RDPLOADSYNC:
                 // NOOP
                 break
-            default:
+            default: {
                 const cmd = gfx.command() << 24 >>> 24;
                 console.warn("unknown command:", cmd, hexzero0x(gfx.command()).slice(8));
+                break;
+            }
         }
     }
 
@@ -597,10 +598,8 @@ export class Interpreter {
 
     public gDPLoadBlock(tileIndex: number, uls: number, ult: number, texels: number, dxt: number): void {
         console.debug("gDPLoadBlock", tileIndex, uls, ult, texels, dxt);
-        // First, verify that we're loading the whole texture.
+        // Verify that we're loading the whole texture.
         assert(uls === 0 && ult === 0);
-
-        const tile = this.DP_TileState[tileIndex];
     }
 
     public gDPSetTileSize(tile: number, uls: number, ult: number, lrs: number, lrt: number): void {
@@ -653,8 +652,6 @@ export class Interpreter {
         this.gSPTexture(true /* G_ON */, 0 /* G_TX_RENDERTILE */, 1, 0xFFFF, 0xFFFF);
         this.gDPSetTextureImage(meta.imageFormat, meta.imageSize, 1, 0);
 
-        const flag = gfx.w0 & 0x200;
-        const type = gfx.c0(0, 3); // Most common is 2, then 4.
         this.DP_TileState[0].cms = (gfx.w0 >>> 22) & 3;
         this.DP_TileState[0].cmt = (gfx.w0 >>> 20) & 3;
 

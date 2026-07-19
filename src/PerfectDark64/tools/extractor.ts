@@ -1,17 +1,18 @@
 import ArrayBufferSlice from "../../ArrayBufferSlice";
-import { assert, hexzero0x, hexzero } from "../../util";
+import { assert } from "../../util";
 import { inflateRawSync } from "zlib";
-import { writeFileSync, readdirSync, mkdirSync } from "fs";
+import { writeFileSync, mkdirSync } from "fs";
 import { stages, StageID } from "../stages";
 
 import ROM from "../rom";
 import type { Inflater }  from "../rom";
-import { Room, BGSegment } from "../bg";
-import { Format, inflateTexture, InflatedTexture } from "../tex";
+import { BGSegment } from "../bg";
+import { inflateTexture, InflatedTexture } from "../tex";
 
 const pathROM = `./data/PerfectDark64/pd.ntsc-final.z64`;
 const pathBaseOut = `./data/PerfectDark64/`;
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function unique(input: Array<any>): Array<any> {
     return input.filter((v, i, a) => {
         return a.indexOf(v) === i;
@@ -93,13 +94,13 @@ function writeTextureData(rom: ROM) {
     mkdirSync(outBase, {recursive: true});
 
     let inflatedSize = 0;
-    let meta: tex.InflatedTexture[] = [];
+    const meta: tex.InflatedTexture[] = [];
 
     // Arbitrary, must be able to contain all decompressed textures.
     let bigBin = new Uint8Array(5 << 20);
 
     rom.textureData.forEach((data, i) => {
-        let texture: InflatedTexture = {index: i};
+        const texture: InflatedTexture = {index: i};
         const [decompressed, palette] = inflateTexture(texture, data, decompress);
         if (decompressed.byteLength <= 0) {
             // FIXME: Silence until we implement other decompression methods.

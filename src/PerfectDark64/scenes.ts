@@ -1,26 +1,23 @@
-import * as RDP from "../Common/N64/RDP";
 import * as UI from "../ui";
 import * as Viewer from "../viewer";
 import ArrayBufferSlice from "../ArrayBufferSlice";
 import { AABB } from "../Geometry";
-import { GfxBlendFactor, GfxBlendMode, GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxCullMode, GfxDevice, GfxFormat, GfxInputLayout, GfxMipFilterMode, GfxProgram, GfxSampler, GfxTexFilterMode, GfxTexture, GfxVertexBufferFrequency, GfxWrapMode, makeTextureDescriptor2D, GfxMegaStateDescriptor } from "../gfx/platform/GfxPlatform";
-import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
+import { GfxBlendFactor, GfxBlendMode, GfxDevice, GfxFormat, GfxMipFilterMode, GfxProgram, GfxTexFilterMode, makeTextureDescriptor2D, GfxMegaStateDescriptor } from "../gfx/platform/GfxPlatform";
 import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
 import { GfxrAttachmentSlot } from "../gfx/render/GfxRenderGraph";
 import { IS_DEVELOPMENT } from "../BuildVersion";
 import { TextureLUT, parseTLUT, getTLUTSize, ImageFormat, ImageSize } from "../Common/N64/Image";
 import { SceneContext } from "../SceneBase";
-import { computeViewMatrix, computeViewMatrixSkybox, CameraController } from '../Camera.js';
-import { fillMatrix4x2, fillMatrix4x3, fillMatrix4x4, fillVec4 } from "../gfx/helpers/UniformBufferHelpers";
-import { assert, hexzero0x } from "../util";
+import { computeViewMatrixSkybox, CameraController } from '../Camera.js';
+import { fillMatrix4x2, fillMatrix4x3, fillMatrix4x4 } from "../gfx/helpers/UniformBufferHelpers";
+import { hexzero0x } from "../util";
 import { makeBackbufferDescSimple, makeAttachmentClearDescriptor, opaqueBlackFullClearRenderPassDescriptor, standardFullClearRenderPassDescriptor } from '../gfx/helpers/RenderGraphHelpers.js';
-import { setSortKeyTranslucentDepth, setSortKeyDepth, makeSortKey, GfxRendererLayer, GfxRenderInst, GfxRenderInstList, gfxRenderInstCompareSortKey, GfxRenderInstExecutionOrder } from "../gfx/render/GfxRenderInstManager";
-import { quat, vec3, mat4 } from "gl-matrix";
+import { setSortKeyDepth, makeSortKey, GfxRendererLayer, GfxRenderInst, GfxRenderInstList, gfxRenderInstCompareSortKey, GfxRenderInstExecutionOrder } from "../gfx/render/GfxRenderInstManager";
+import { vec3, mat4 } from "gl-matrix";
 import { setAttachmentStateSimple } from '../gfx/helpers/GfxMegaStateDescriptorHelpers';
 import { drawWorldSpaceAABB, drawWorldSpaceLocator, drawScreenSpaceText, drawWorldSpaceText, getDebugOverlayCanvas2D } from '../DebugJunk'
 
 import * as tex from "./tex";
-import { NumTextures } from "./rom";
 import { Program } from "./shaders";
 import { RoomBlockType, Block, BGSegment, Room} from "./bg";
 import { PadFlag, Pad, Setup, loadPadsFromBinary } from "./setup";
@@ -84,8 +81,6 @@ class Scene implements Viewer.SceneGfx {
         private pads: Pad[],
     ) {
         this.renderHelper = new GfxRenderHelper(device);
-        const cache = this.renderHelper.renderCache;
-
         this.skyColor = makeAttachmentClearDescriptor(stage.skyColor);
         this.rooms = this.buildSceneRooms(device, seg);
     }
@@ -110,7 +105,7 @@ class Scene implements Viewer.SceneGfx {
     }
 
     private createProgram(): Program {
-        var ret = new Program();
+        const ret = new Program();
 
         if (this.shouldEnableVertexColors) {
             ret.defines.set('ENABLE_VERTEX_COLORS', '1');
@@ -124,7 +119,7 @@ class Scene implements Viewer.SceneGfx {
     }
 
     private buildSceneRooms(device: GfxDevice, seg: BGSegment): Map<number, SceneRoom> {
-        var ret: Map<number, SceneRoom> = new Map();
+        const ret: Map<number, SceneRoom> = new Map();
 
         seg.rooms.forEach(room => {
             const opaque = this.buildBlockTree(device, room, room.opaqueRoot);
@@ -156,7 +151,7 @@ class Scene implements Viewer.SceneGfx {
             return [];
         }
 
-        var interpreter = new Interpreter(this.textureHolder);
+        const interpreter = new Interpreter(this.textureHolder);
         interpreter.setSegmentVertices(Segment.BGVtx, room.vertices);
         interpreter.setSegmentColors(Segment.BGCol, room.colors);
         let block: Block | undefined = room.blocks[rootIndex];
@@ -182,7 +177,6 @@ class Scene implements Viewer.SceneGfx {
     public render(device: GfxDevice, viewerInput: Viewer.ViewerRenderInput): void {
         this.renderHelper.debugDraw.beginFrame(viewerInput.camera.projectionMatrix, viewerInput.camera.viewMatrix, viewerInput.backbufferWidth, viewerInput.backbufferHeight);
 
-        const renderInstManager = this.renderHelper.renderInstManager;
         const mainColorDesc = makeBackbufferDescSimple(GfxrAttachmentSlot.Color0, viewerInput, this.skyColor);
         const mainDepthDesc = makeBackbufferDescSimple(GfxrAttachmentSlot.DepthStencil, viewerInput, opaqueBlackFullClearRenderPassDescriptor);
         const builder = this.renderHelper.renderGraph.newGraphBuilder();
@@ -325,7 +319,7 @@ class Scene implements Viewer.SceneGfx {
             }
 
             if (this.shouldDisplayRoomIDs) {
-                let center = vec3.create();
+                const center = vec3.create();
                 room.absoluteBBox.centerPoint(center);
                 drawWorldSpaceText(
                     getDebugOverlayCanvas2D(),
@@ -352,7 +346,7 @@ class Scene implements Viewer.SceneGfx {
     }
 
     private renderSceneRoom(room: SceneRoom, viewerInput: Viewer.ViewerRenderInput , opaque: boolean): GfxRenderInst[] {
-        var ret: GfxRenderInst[] = [];
+        const ret: GfxRenderInst[] = [];
 
         if (opaque && this.shouldRenderOpaque) {
             room.opaque.forEach(mesh => {
@@ -384,7 +378,7 @@ class Scene implements Viewer.SceneGfx {
         let offs = 0;
 
         if (mesh.isSkybox) {
-            let skyProj = mat4.create();
+            const skyProj = mat4.create();
             computeViewMatrixSkybox(skyProj, viewerInput.camera);
             mat4.mul(skyProj, viewerInput.camera.projectionMatrix, skyProj);
             offs += fillMatrix4x4(data, offs, skyProj);
@@ -392,7 +386,7 @@ class Scene implements Viewer.SceneGfx {
             offs += fillMatrix4x4(data, offs, viewerInput.camera.clipFromWorldMatrix);
         }
 
-        let mat = mat4.create();
+        const mat = mat4.create();
         mat4.translate(mat, mat, [pos.x, pos.y, pos.z]);
         offs += fillMatrix4x3(data, offs, mat);
 
@@ -400,7 +394,7 @@ class Scene implements Viewer.SceneGfx {
         offs += fillMatrix4x2(data, offs, mesh.texMatrix); // TODO second tex
 
         data[offs++] = +(mesh.texture !== null);
-        data[offs++] = opaque ? 1.0 : 0.0;
+        data[offs++] = opaque ? 1.0 : 0.0; // eslint-disable-line
 
         if (this.gfxProgram === null) {
             this.gfxProgram = this.renderHelper.renderCache.createProgram(this.createProgram());
@@ -429,7 +423,7 @@ class Scene implements Viewer.SceneGfx {
 
         renderInst.setDrawCount(mesh.indexCount);
 
-        let megaStateFlags: Partial<GfxMegaStateDescriptor> = {
+        const megaStateFlags: Partial<GfxMegaStateDescriptor> = {
             cullMode: mesh.cullMode,
         };
         megaStateFlags.depthWrite = opaque;
@@ -583,7 +577,7 @@ async function loadViewerTextures(sceneContext: SceneContext, device: GfxDevice)
     const bin = await binPromise;
 
     const viewerTextures = meta.map(texture => {
-        let lut = new Uint8Array(4 * texture.numColors);
+        const lut = new Uint8Array(4 * texture.numColors);
         if (texture.numColors > 0) {
             const originalPalData = bin.subarray(texture.palOffset, texture.palSize).createDataView();
             const palData = new Uint8Array(getTLUTSize(texture.imageSize) * 2);
@@ -600,6 +594,7 @@ async function loadViewerTextures(sceneContext: SceneContext, device: GfxDevice)
             if (preprocessed === null) {
                 return {gfxTexture: null, extraInfo: null};
             }
+
             decoded = tex.decodeTexture(texture, preprocessed!.createDataView(), lut);
         } catch (e) {
             console.error("exception during decoding of texture", hexzero0x(texture.index, 4), e);

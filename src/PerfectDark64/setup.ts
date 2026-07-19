@@ -1,7 +1,7 @@
 import ArrayBufferSlice from "../ArrayBufferSlice";
 import { AABB } from "../Geometry";
 import { vec3 } from "gl-matrix";
-import { assert, hexzero0x } from "../util";
+import { hexzero0x } from "../util";
 
 import { Color, loadColorFromView } from "./f3dex";
 
@@ -16,24 +16,24 @@ export interface Pad {
     liftNum: number;
     // unk52: number;
 }
-const padStructSize = 0x54;
 
-interface PadsFileHeader {
+/*
+Pads file header:
     numpads:         number;   // s32
     numcovers:       number;   // s32
     waypointsoffset: number;   // s32
     waygroupsoffset: number;   // s32
     coversoffset:    number;   // s32
     offsets:         number[]; // u16[numpads]
-}
+*/
 
 export function loadPadsFromBinary(data: ArrayBufferSlice): Pad[] {
-    var ret: Pad[] = [];
+    const ret: Pad[] = [];
     const view = data.createDataView();
     const numPads = view.getInt32(0x00);
 
     for (let i = 0; i < numPads; i++) {
-        let offset = view.getUint16(0x14 + (i * 2));
+        const offset = view.getUint16(0x14 + (i * 2));
         ret.push(padFromView(view, offset));
     }
 
@@ -66,7 +66,7 @@ function padFromView(view: DataView, offset: number): Pad {
     }
 
     let up: vec3;
-	if (!!(flags & (PadFlag.UPALIGNTOX | PadFlag.UPALIGNTOY | PadFlag.UPALIGNTOZ))) {
+	if (flags & (PadFlag.UPALIGNTOX | PadFlag.UPALIGNTOY | PadFlag.UPALIGNTOZ)) {
         const sign = (flags & PadFlag.UPALIGNINVERT) ? -1 : 1;
         up = vec3.fromValues(
             (flags & PadFlag.UPALIGNTOX) ? sign : 0,
@@ -83,7 +83,7 @@ function padFromView(view: DataView, offset: number): Pad {
     }
 
     let look: vec3;
-	if (!!(flags & (PadFlag.LOOKALIGNTOX | PadFlag.LOOKALIGNTOY | PadFlag.LOOKALIGNTOZ))) {
+	if (flags & (PadFlag.LOOKALIGNTOX | PadFlag.LOOKALIGNTOY | PadFlag.LOOKALIGNTOZ)) {
         const sign = (flags & PadFlag.LOOKALIGNINVERT) ? -1 : 1;
         look = vec3.fromValues(
             (flags & PadFlag.LOOKALIGNTOX) ? sign : 0,
@@ -115,7 +115,6 @@ function padFromView(view: DataView, offset: number): Pad {
             view.getFloat32(offset + 0x0c),
             view.getFloat32(offset + 0x14),
         );
-        offset += 6 * 4;
     } else {
         bbox = new AABB(
             -100, -100, -100,
@@ -163,7 +162,7 @@ export class Setup {
         const type = view.getUint8(offset + 3);
 
         switch (type) {
-            case ObjectType.BASIC:
+            case ObjectType.BASIC: {
                 const obj = defaultObjectFromView(view, offset);
                 if (obj.pad < 0) {
                     break;
@@ -172,6 +171,7 @@ export class Setup {
                 const pad = pads[obj.pad];
                 this.basic.push({obj, pad});
                 break;
+            }
             case ObjectType.DOOR:
                 this.doors.push(createDoorFromView(view, offset, state, pads));
                 break;
@@ -199,10 +199,11 @@ export class Setup {
             switch(cmd) {
                 case IntroCommand.END:
                     return;
-                case IntroCommand.SPAWN:
+                case IntroCommand.SPAWN: {
                     const padNum = view.getInt32(offset + 4);
                     this.spawn = pads[padNum];
                     break;
+                }
             }
 
             offset += introCommandSize(cmd) * 4;
@@ -382,7 +383,7 @@ function defaultObjectFromView(view: DataView, offset: number): DefaultObject {
 }
 
 function getFloat32Array(view: DataView, offset: number, entries: number): number[] {
-    var ret = new Array(entries);
+    const ret = new Array(entries);
     for (let i = 0; i < entries; i++) {
         ret[i] = view.getFloat32(offset + i * 4);
     }

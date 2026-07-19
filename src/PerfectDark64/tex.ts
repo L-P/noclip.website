@@ -318,7 +318,7 @@ export function preprocessTexture(
             const reader = new BitReader(data);
             reader.read(32); // skip two headers
             const blocksTotal = texture.width * texture.height * numChannels(texture.format);
-            let buf = inflateRLETexture(texture, data, reader, blocksTotal);
+            let buf = inflateRLETexture(reader, blocksTotal);
             if (has1BitAlpha(texture.format)) {
                 buf = readAlphaBits(texture, buf, reader);
             }
@@ -351,7 +351,7 @@ export function preprocessTexture(
             const lookup = buildLookupTable(texture, reader, numColors);
 
             const blocksTotal = texture.width * texture.height;
-            let buf = inflateRLETexture(texture, data, reader, blocksTotal);
+            const buf = inflateRLETexture(reader, blocksTotal);
 
             return inflateLookup(texture, buf, lookup, numColors);
         }
@@ -606,8 +606,6 @@ export function alignedTextureSize(texture: InflatedTexture): number {
 // Expanded to r5g5b5a1 RGBA16.
 function unpackChannels_RGB15(texture: InflatedTexture, data: ArrayBufferSlice): ArrayBufferSlice {
     const out = new Uint16Array(alignedTextureSize(texture));
-    const view = data.createDataView();
-    const area = texture.width * texture.height;
 
     let dstOffset = 0;
     const reader = new BitReader(data);
@@ -718,7 +716,6 @@ function unpackChannels_IA8(texture: InflatedTexture, data: ArrayBufferSlice): A
 function unpackChannels_I4(texture: InflatedTexture, data: ArrayBufferSlice): ArrayBufferSlice {
     const out = new Uint8Array(alignedTextureSize(texture));
     const view = data.createDataView();
-    const area = texture.width * texture.height;
 
     let offset = 0;
     let dstOffset = 0;
@@ -729,7 +726,7 @@ function unpackChannels_I4(texture: InflatedTexture, data: ArrayBufferSlice): Ar
             offset += 2;
         }
 
-        if (!!(texture.width & 1)) {
+        if (texture.width & 1) {
             offset--;
         }
 
@@ -757,7 +754,7 @@ function unpackChannels_IA4(texture: InflatedTexture, data: ArrayBufferSlice): A
             offset += 2
         }
 
-        if (!!(texture.width & 1)) {
+        if (texture.width & 1) {
             offset--;
         }
 
@@ -770,8 +767,6 @@ function unpackChannels_IA4(texture: InflatedTexture, data: ArrayBufferSlice): A
 
 
 function inflateRLETexture(
-    texture: InflatedTexture,
-    data: ArrayBufferSlice,
     reader: BitReader,
     blocksTotal: number,
 ): ArrayBufferSlice {
@@ -786,7 +781,7 @@ function inflateRLETexture(
     }
 
     let blocksDone = 0;
-    let dst: Uint8Array|Uint16Array =
+    const dst: Uint8Array|Uint16Array =
         (blockSize <= 8) ?
         new Uint8Array(blocksTotal) :
         new Uint16Array(blocksTotal)
@@ -849,7 +844,6 @@ function realignZlibTexture(texture: InflatedTexture, data: ArrayBufferSlice): A
     let inOffset = 0;
     let outOffset = 0;
     for (let y = 0; y < texture.height; y++) {
-        var written = 0;
         for (let x = 0; x < texture.width; x += ipb) {
             dst[outOffset] = view.getUint8(inOffset);
             outOffset++;
@@ -895,6 +889,9 @@ export function decodeTexture(texture: InflatedTexture, view: DataView, lut: Uin
         break;
     case Format.IA4:
         decodeTex_IA4(dst, view, 0, texture.width, texture.height);
+        break;
+    case Format.IA16:
+        decodeTex_IA16(dst, view, 0, texture.width, texture.height);
         break;
     default:
         console.warn(hexzero0x(texture.index, 4) +":", "decodeTexture: unhandled format:", Format[texture.format]);

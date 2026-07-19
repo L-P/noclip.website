@@ -1,7 +1,7 @@
 import { SceneRoom } from "./scenes";
 import { AABB } from "../Geometry";
 import { StageID } from "./stages";
-import { vec3, ReadonlyVec3 } from "gl-matrix";
+import { ReadonlyVec3 } from "gl-matrix";
 
 // The original portal-based renderer doesn't make sense when you go OOB so
 // room overlaps need to be handled the hacky way.
@@ -36,7 +36,8 @@ export function updateHarcodedHacks(
 
         case StageID.Defense:
         case StageID.Duel:
-            updateInstituteHacks(currentRoom, pos, rooms);
+            // This place is a mess. Actually implementing portals might be quicker
+            // than finding hacky workarounds.
             break;
 
         case StageID.Infiltration:
@@ -118,11 +119,6 @@ function updateDDTowerHacks(currentRoom: number, pos: ReadonlyVec3, rooms: Map<n
     }
 }
 
-function updateInstituteHacks(currentRoom: number, pos: ReadonlyVec3, rooms: Map<number, SceneRoom>): void {
-    // This place is a mess. Actually implementing portals might be quicker
-    // than finding hacky workarounds.
-}
-
 function updateArea51Hacks(currentRoom: number, pos: ReadonlyVec3, rooms: Map<number, SceneRoom>): void {
     { // The two dissection areas overlap, it's also visible from the rooms leading up to them.
         const sectionA = [0x90, 0x91, 0x92, 0x93, 0x94, 0x99, 0x9a, 0x98, 0x96, 0x97, 0x97, 0x95];
@@ -131,8 +127,8 @@ function updateArea51Hacks(currentRoom: number, pos: ReadonlyVec3, rooms: Map<nu
             sectionA.forEach(v => rooms.get(v)!.setVisible(true));
             sectionB.forEach(v => rooms.get(v)!.setVisible(true));
         } else {
-            let sectionAbbox = new AABB();
-            let sectionBbbox = new AABB();
+            const sectionAbbox = new AABB();
+            const sectionBbbox = new AABB();
             sectionA.forEach(v => sectionAbbox.union(sectionAbbox, rooms.get(v)!.absoluteBBox));
             sectionB.forEach(v => sectionBbbox.union(sectionBbbox, rooms.get(v)!.absoluteBBox));
 

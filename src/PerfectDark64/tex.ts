@@ -198,8 +198,8 @@ export enum CompressionMethod {
     LOOKUP             = 5,
     HUFFMANLOOKUP      = 6,
     RLELOOKUP          = 7,
-    HUFFMANBLUR        = 8,
-    RLEBLUR            = 9,
+    HUFFMANPAETH        = 8,
+    RLEPAETH            = 9,
 
     // Not a "real" value, we set this when isZlib is set to have something to
     // show in the texture viewer.
@@ -300,12 +300,12 @@ export function preprocessTexture(
             return unpackChannels(texture, buf);
         }
 
-        case CompressionMethod.HUFFMANBLUR: {
+        case CompressionMethod.HUFFMANPAETH: {
             const reader = new BitReader(data);
             reader.read(32); // skip two headers
-            const blurMethod = reader.read(3);
+            const method = reader.read(3);
             let buf = inflateHuffmanTexture(texture, data, reader);
-            buf = blurTexture(texture, buf, blurMethod);
+            buf = applyPaethFilter(texture, buf, method);
 
             if (has1BitAlpha(texture.format)) {
                 buf = readAlphaBits(texture, buf, reader);
@@ -365,7 +365,19 @@ export function preprocessTexture(
     return null;
 }
 
-function blurTexture(texture: InflatedTexture, data: ArrayBufferSlice, method: number): ArrayBufferSlice {
+
+/*
+ * Apply a Paeth filter. During compression a pixel's value is predicted from
+ * a "predictor" set of neighbouring pixels and only the difference between the
+ * predicted value and the actual value is stored.
+ * This reduces the range of values since pixels are often locally similar,
+ * smaller range means better RLE/Huffman compressibility.
+*/
+function applyPaethFilter(
+    texture: InflatedTexture,
+    data: ArrayBufferSlice,
+    method: number,
+): ArrayBufferSlice {
     const chanSize = toChannelSize(texture.format);
     const buf = data.createTypedArray(Uint8Array);
     const height = numChannels(texture.format)*texture.height;
@@ -404,7 +416,7 @@ function blurTexture(texture: InflatedTexture, data: ArrayBufferSlice, method: n
                 default:
                     console.warn(
                         hexzero0x(texture.index, 4) +":",
-                        "unhandled blur method:", method,
+                        "unhandled paeth method:", method,
                     );
             }
         }

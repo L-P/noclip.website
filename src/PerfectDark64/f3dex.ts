@@ -81,7 +81,6 @@ export enum Command {
     G_COL               = 0x07,// like  G_VTX but for vertex colors.
     G_TRI4              = 0xB1,
     G_CLEARGEOMETRYMODE = 0xB6,
-    G_RDPSETOTHERMODE   = 0xB7,
     G_SETGEOMETRYMODE   = 0xB7,
     G_ENDDL             = 0xB8,
     G_SETOTHERMODE_L    = 0xB9,
@@ -217,7 +216,7 @@ export class MeshBuilder {
     public indices: number[] = [];
     public texture: GfxTexture | null = null;
     public textureNumber: number | null = null;
-    public geometryMode: GeometryMode = 0;
+    public SP_GeometryMode: GeometryMode = 0;
     public wrapS: GfxWrapMode;
     public wrapT: GfxWrapMode;
     public aabb: AABB = new AABB();
@@ -252,7 +251,7 @@ export class MeshBuilder {
         }
 
         mesh.texture = this.texture;
-        mesh.cullMode = translateCullMode(this.geometryMode);
+        mesh.cullMode = translateCullMode(this.SP_GeometryMode);
         mesh.wrapS = this.wrapS;
         mesh.wrapT = this.wrapT;
         mesh.aabb = this.aabb;
@@ -333,7 +332,7 @@ export class Interpreter {
     private colSegments: Color[][] = [];
     private vtxCache: Vertex[] = Array<Vertex>(16);
     private colCache: Color[] = [];
-    private geometryMode: GeometryMode = 0; // bitflags
+    private SP_GeometryMode: GeometryMode = 0; // bitflags
 
     private SP_TextureState = new F3DEX.TextureState();
     private DP_OtherModeL: number = 0;
@@ -356,7 +355,7 @@ export class Interpreter {
 
     private flush() {
         if (this.cur !== null) {
-            this.cur.geometryMode = this.geometryMode;
+            this.cur.SP_GeometryMode = this.SP_GeometryMode;
             const tile = this.DP_TileState[this.SP_TextureState.tile];
             this.cur.wrapT = texModeToGfx(tile.cmt);
             this.cur.wrapS = texModeToGfx(tile.cms);
@@ -428,10 +427,10 @@ export class Interpreter {
                 this.gSPColor(gfx);
                 break;
             case Command.G_SETGEOMETRYMODE:
-                this.geometryMode |= gfx.w1;
+                this.SP_GeometryMode |= gfx.w1;
                 break;
             case Command.G_CLEARGEOMETRYMODE:
-                this.geometryMode &= ~gfx.w1;
+                this.SP_GeometryMode &= ~gfx.w1;
                 break;
 
             case Command.G_LOADTLUT: {
@@ -466,11 +465,6 @@ export class Interpreter {
 
             case Command.G_SETCOMBINE:
                 this.gDPSetCombine(gfx.w0 & 0x00FFFFFF, gfx.w1);
-                break;
-
-            case Command.G_RDPSETOTHERMODE:
-                this.gDPSetOtherModeH(0, 24, gfx.w0 & 0x00FFFFFF);
-                this.gDPSetOtherModeL(0, 32, gfx.w1);
                 break;
 
             case Command.G_SETOTHERMODE_H: {

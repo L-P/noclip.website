@@ -689,8 +689,22 @@ function unpackChannels_RGBA16(texture: InflatedTexture, data: ArrayBufferSlice)
 }
 
 function unpackChannels_I8(texture: InflatedTexture, data: ArrayBufferSlice): ArrayBufferSlice {
-    // NOOP, there's no unaligned I8 texture found in ROM.
-    return data;
+    const out = new Uint8Array(alignedTextureSize(texture));
+    const view = data.createDataView();
+
+    let offset = 0;
+    let dstOffset = 0;
+
+    for (let y = 0; y < texture.height; y++) {
+        for (let x = 0; x < texture.width; x++) {
+            out[dstOffset + x] = view.getUint8(offset);
+            offset++;
+        }
+
+        dstOffset += (texture.width + 7) & 0xff8;
+    }
+
+    return ArrayBufferSlice.fromView(out);
 }
 
 function unpackChannels_IA8(texture: InflatedTexture, data: ArrayBufferSlice): ArrayBufferSlice {

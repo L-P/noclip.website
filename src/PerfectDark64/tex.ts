@@ -870,45 +870,92 @@ function realignZlibTexture(texture: InflatedTexture, data: ArrayBufferSlice): A
     return data;
 }
 
-export function decodeTexture(texture: InflatedTexture, view: DataView, lut: Uint8Array): Uint8Array {
+function grow(data: ArrayBufferSlice, growthLength: number): ArrayBufferSlice {
+    const expanded: Uint8Array = new Uint8Array(data.byteLength + growthLength);
+    expanded.set(data.createTypedArray(Uint8Array));
+    return ArrayBufferSlice.fromView(expanded);
+}
+
+function getLine(texture: InflatedTexture): number {
+    if (texture.compressionMethod === CompressionMethod.ZLIB) {
+        return 0;
+    }
+
+    switch (texture.format) {
+        case Format.IA16:
+        case Format.RGB15:
+        case Format.RGBA16:      return  (texture.width  +  3)   >>>  2;
+        case Format.I8:
+        case Format.IA16_CI8:
+        case Format.IA8:
+        case Format.RGBA16_CI8:  return  (texture.width  +  7)   >>>  3;
+        case Format.I4:
+        case Format.IA16_CI4:
+        case Format.IA4:
+        case Format.RGBA16_CI4:  return  (texture.width  +  15)  >>>  4;
+        default: return 0;
+    }
+}
+
+export function decodeTexture(texture: InflatedTexture, data: ArrayBufferSlice, lut: Uint8Array): Uint8Array {
+    // decodeTex_* will read OOB on odd-sided textures.
+    const view = grow(data, 0x1000).createDataView();
+
+    // HACK/FIXME: Some odd-sided textures are decoded as if they were larger.
+    // I'm not yet sure this is the right way to do it or the right alignment.
+    texture.width = (texture.width + 1) & ~1;
+
     const dst = new Uint8Array(texture.width * texture.height * 4);
+    const line = getLine(texture);
 
     switch (texture.format) {
     case Format.RGBA32:
         decodeTex_RGBA32(dst, view, 0, texture.width, texture.height);
         break;
     case Format.RGB15:
-    case Format.RGBA16:
-        decodeTex_RGBA16(dst, view, 0, texture.width, texture.height);
+    case Format.RGBA16: {
+        decodeTex_RGBA16(dst, view, 0, texture.width, texture.height, line);
         break;
+    }
     case Format.RGBA16_CI8:
-    case Format.IA16_CI8:
-        decodeTex_CI8(dst, view, 0, texture.width, texture.height, lut);
+    case Format.IA16_CI8: {
+        decodeTex_CI8(dst, view, 0, texture.width, texture.height, lut, line);
         break;
+    }
     case Format.RGBA16_CI4:
-    case Format.IA16_CI4:
-        decodeTex_CI4(dst, view, 0, texture.width, texture.height, lut);
+    case Format.IA16_CI4: {
+        decodeTex_CI4(dst, view, 0, texture.width, texture.height, lut, line);
         break;
+    }
     case Format.RGB24:
         decodeTex_RGB24(dst, view, 0, texture.width, texture.height);
         break;
-    case Format.I8:
-        decodeTex_I8(dst, view, 0, texture.width, texture.height);
+    case Format.I8: {
+        decodeTex_I8(dst, view, 0, texture.width, texture.height, line);
         break;
-    case Format.I4:
-        decodeTex_I4(dst, view, 0, texture.width, texture.height);
+    }
+    case Format.I4: {
+        decodeTex_I4(dst, view, 0, texture.width, texture.height, line);
         break;
-    case Format.IA8:
-        decodeTex_IA8(dst, view, 0, texture.width, texture.height);
+    }
+    case Format.IA8: {
+        decodeTex_IA8(dst, view, 0, texture.width, texture.height, line);
         break;
-    case Format.IA4:
-        decodeTex_IA4(dst, view, 0, texture.width, texture.height);
+    }
+    case Format.IA4: {
+        decodeTex_IA4(dst, view, 0, texture.width, texture.height, line);
         break;
-    case Format.IA16:
-        decodeTex_IA16(dst, view, 0, texture.width, texture.height);
+    }
+    case Format.IA16: {
+        decodeTex_IA16(dst, view, 0, texture.width, texture.height, line);
         break;
+    }
     default:
-        console.warn(hexzero0x(texture.index, 4) +":", "decodeTexture: unhandled format:", Format[texture.format]);
+        console.warn(
+            hexzero0x(texture.index, 4) + ":",
+            "decodeTexture: unhandled format:",
+            Format[texture.format],
+        );
         break;
     }
 

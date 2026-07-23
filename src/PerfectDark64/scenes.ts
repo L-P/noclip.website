@@ -595,7 +595,7 @@ async function loadViewerTextures(sceneContext: SceneContext, device: GfxDevice)
                 return {gfxTexture: null, extraInfo: null};
             }
 
-            decoded = tex.decodeTexture(texture, preprocessed!.createDataView(), lut);
+            decoded = tex.decodeTexture(texture, preprocessed, lut);
         } catch (e) {
             console.error("exception during decoding of texture", hexzero0x(texture.index, 4), e);
             return { gfxTexture: null, extraInfo: null };

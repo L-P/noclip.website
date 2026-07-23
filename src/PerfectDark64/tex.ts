@@ -250,7 +250,7 @@ export function inflateTexture(
     decompress: Inflater,
 ): [ArrayBufferSlice, ArrayBufferSlice|null] /* indices, palette */ {
     if (data.byteLength <= 0) {
-        console.warn(hexzero0x(texture.index, 4) +":", "cannot inflate texture: no data");
+        console.warn(hexzero0x(texture.index, 4) + ":", "cannot inflate texture: no data");
         return [data, null];
     }
 
@@ -358,7 +358,7 @@ export function preprocessTexture(
     }
 
     console.warn(
-        "texture:", hexzero0x(texture.index, 4) +":",
+        hexzero0x(texture.index, 4) + ":",
         "unhandled compression method:",
         CompressionMethod[texture.compressionMethod]
     );
@@ -415,7 +415,7 @@ function applyPaethFilter(
                     break;
                 default:
                     console.warn(
-                        hexzero0x(texture.index, 4) +":",
+                        hexzero0x(texture.index, 4) + ":",
                         "unhandled paeth method:", method,
                     );
             }
@@ -535,11 +535,20 @@ function inflateHuffmanTexture(texture: InflatedTexture, data: ArrayBufferSlice,
         }
     }
 
+    loop:
     for (let i = 0; i < numIterations; i++) {
         let indexOrValue = rootIndex;
 
         while (indexOrValue < 10000) {
-            indexOrValue = nodes[indexOrValue][reader.read(1)];
+            try {
+                indexOrValue = nodes[indexOrValue][reader.read(1)];
+            } catch {
+                console.warn(
+                    hexzero0x(texture.index, 4) + ":",
+                    "out of bound read during huffman decoding",
+                );
+                break loop;
+            }
         }
 
         if (chanSize <= 256) {
@@ -587,7 +596,7 @@ function unpackChannels(texture: InflatedTexture, data: ArrayBufferSlice): Array
         case Format.RGBA32: return unpackChannels_RGBA32(texture, data);
         default:
             console.warn(
-                hexzero0x(texture.index, 4) +":",
+                hexzero0x(texture.index, 4) + ":",
                 "unpackChannels: unhandled format:", Format[texture.format],
             );
     }
@@ -775,7 +784,7 @@ function unpackChannels_IA4(texture: InflatedTexture, data: ArrayBufferSlice): A
         dstOffset += (texture.width + 15) & 0xff0;
     }
 
-    assert(false, "maybe unused");
+    assert(false, "unused");
     return ArrayBufferSlice.fromView(out);
 }
 

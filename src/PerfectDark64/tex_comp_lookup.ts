@@ -58,22 +58,34 @@ export function inflateLookup(
     lookup: ArrayBufferSlice,
     numColors: number,
 ): null|ArrayBufferSlice {
-    switch (texture.format) {
-        case Format.IA4:
-        case Format.I4: return inflateLookup_I4(texture, src, lookup, numColors);
-        case Format.I8:
-        case Format.IA8: return inflateLookup_I8(texture, src, lookup, numColors);
-        case Format.IA16:
-        case Format.RGB15: return inflateLookup_RGBA16(texture, src, lookup, numColors, isRGB15);
-        case Format.RGBA16: return inflateLookup_RGBA16(texture, src, lookup, numColors);
-        case Format.RGB24: return inflateLookup_RGBA32(texture, src, lookup, numColors, isRGB24);
-        case Format.RGBA32: return inflateLookup_RGBA32(texture, src, lookup, numColors);
-        default:
+    try {
+        switch (texture.format) {
+            case Format.IA4:
+            case Format.I4: return inflateLookup_I4(texture, src, lookup, numColors);
+            case Format.I8:
+            case Format.IA8: return inflateLookup_I8(texture, src, lookup, numColors);
+            case Format.IA16:
+            case Format.RGB15: return inflateLookup_RGBA16(texture, src, lookup, numColors, isRGB15);
+            case Format.RGBA16: return inflateLookup_RGBA16(texture, src, lookup, numColors);
+            case Format.RGB24: return inflateLookup_RGBA32(texture, src, lookup, numColors, isRGB24);
+            case Format.RGBA32: return inflateLookup_RGBA32(texture, src, lookup, numColors);
+            default:
+                console.warn(
+                    "texture:", hexzero0x(texture.index, 4),
+                    "inflateLookup: unhandled format:", Format[texture.format],
+                );
+                return null;
+        }
+    } catch (err: unknown) {
+        if (err instanceof RangeError) {
             console.warn(
-                "texture:", hexzero0x(texture.index, 4),
-                "inflateLookup: unhandled format:", Format[texture.format],
+                hexzero0x(texture.index, 4) + ":",
+                "out of bounds read in inflateLookup"
             );
             return null;
+        }
+
+        throw err;
     }
 
     assert(false, "unreachable");

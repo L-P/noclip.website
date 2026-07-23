@@ -912,7 +912,11 @@ export function decodeTexture(texture: InflatedTexture, data: ArrayBufferSlice, 
 
     // HACK/FIXME: Some odd-sided textures are decoded as if they were larger.
     // I'm not yet sure this is the right way to do it or the right alignment.
-    texture.width = (texture.width + 1) & ~1;
+    // Also the special case on this format in particular is odd.
+    // See textures 0x067f-0x0682 for neighboring cases of various formats.
+    if (texture.imageSize === ImageSize.G_IM_SIZ_4b) {
+        texture.width = (texture.width + 1) & ~1;
+    }
 
     const dst = new Uint8Array(texture.width * texture.height * 4);
     const line = getLine(texture);

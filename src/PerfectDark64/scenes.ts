@@ -58,7 +58,7 @@ class Scene implements Viewer.SceneGfx {
 
     private renderInstListSky = new GfxRenderInstList();
     private renderInstListMain = new GfxRenderInstList();
-    private renderInstListXLU = new GfxRenderInstList(gfxRenderInstCompareSortKey, GfxRenderInstExecutionOrder.Backwards);
+    private renderInstListXLU = new GfxRenderInstList(gfxRenderInstCompareSortKey, GfxRenderInstExecutionOrder.Forwards);
     private gfxProgram: GfxProgram | null = null;
     private rooms: Map<number, SceneRoom>;
     private skyColor = standardFullClearRenderPassDescriptor;

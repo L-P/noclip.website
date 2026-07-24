@@ -2,14 +2,14 @@ import * as UI from "../ui";
 import * as Viewer from "../viewer";
 import ArrayBufferSlice from "../ArrayBufferSlice";
 import { AABB } from "../Geometry";
-import { GfxBlendFactor, GfxBlendMode, GfxDevice, GfxFormat, GfxMipFilterMode, GfxProgram, GfxTexFilterMode, makeTextureDescriptor2D, GfxMegaStateDescriptor } from "../gfx/platform/GfxPlatform";
+import { GfxBlendFactor, GfxBlendMode, GfxDevice, GfxFormat, GfxMipFilterMode, GfxTexFilterMode, makeTextureDescriptor2D, GfxMegaStateDescriptor } from "../gfx/platform/GfxPlatform";
 import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
 import { GfxrAttachmentSlot } from "../gfx/render/GfxRenderGraph";
 import { IS_DEVELOPMENT } from "../BuildVersion";
 import { TextureLUT, parseTLUT, getTLUTSize, ImageFormat, ImageSize } from "../Common/N64/Image";
 import { SceneContext } from "../SceneBase";
 import { computeViewMatrixSkybox, CameraController } from '../Camera.js';
-import { fillMatrix4x2, fillMatrix4x3, fillMatrix4x4 } from "../gfx/helpers/UniformBufferHelpers";
+import { fillVec4, fillMatrix4x2, fillMatrix4x3, fillMatrix4x4 } from "../gfx/helpers/UniformBufferHelpers";
 import { hexzero0x } from "../util";
 import { makeBackbufferDescSimple, makeAttachmentClearDescriptor, opaqueBlackFullClearRenderPassDescriptor, standardFullClearRenderPassDescriptor } from '../gfx/helpers/RenderGraphHelpers.js';
 import { setSortKeyDepth, makeSortKey, GfxRendererLayer, GfxRenderInst, GfxRenderInstList, gfxRenderInstCompareSortKey, GfxRenderInstExecutionOrder } from "../gfx/render/GfxRenderInstManager";
@@ -59,7 +59,6 @@ class Scene implements Viewer.SceneGfx {
     private renderInstListSky = new GfxRenderInstList();
     private renderInstListMain = new GfxRenderInstList();
     private renderInstListXLU = new GfxRenderInstList(gfxRenderInstCompareSortKey, GfxRenderInstExecutionOrder.Forwards);
-    private gfxProgram: GfxProgram | null = null;
     private rooms: Map<number, SceneRoom>;
     private skyColor = standardFullClearRenderPassDescriptor;
 
@@ -67,7 +66,6 @@ class Scene implements Viewer.SceneGfx {
     private shouldDisplayRoomIDs: boolean = false;
     private shouldDisplayPadBoundingBoxes: boolean = false;
     private shouldEnableTextures: boolean = true;
-    private shouldEnableVertexColors: boolean = true;
     private shouldRenderSkybox: boolean = true;
     private shouldRenderOpaque: boolean = true;
     private shouldRenderTranslucent: boolean = true;
@@ -104,12 +102,8 @@ class Scene implements Viewer.SceneGfx {
         mat4.targetTo(dst, pos, target, this.setup.spawn.up);
     }
 
-    private createProgram(): Program {
-        const ret = new Program();
-
-        if (this.shouldEnableVertexColors) {
-            ret.defines.set('ENABLE_VERTEX_COLORS', '1');
-        }
+    private createProgram(mesh: Mesh): Program {
+        const ret = new Program(mesh.DP_Combine, mesh.DP_OtherModeL, mesh.DP_OtherModeH);
 
         if (this.shouldEnableTextures) {
             ret.defines.set('ENABLE_TEXTURES', '1');
@@ -370,34 +364,18 @@ class Scene implements Viewer.SceneGfx {
     ): GfxRenderInst {
         const template = this.renderHelper.pushTemplateRenderInst();
         template.setBindingLayouts([{
-            numSamplers: 1,
-            numUniformBuffers: 1,
+            numSamplers: 2,
+            numUniformBuffers: 3,
         }]);
 
-        const data = template.allocateUniformBufferF32(Program.ub_SceneParams, (4*4) + (3*4) + (2*2*4) + 4);
-        let offs = 0;
+        this.setSceneParams(template, mesh, pos, viewerInput);
+        this.setDrawParams(template, mesh, opaque);
+        this.setCombineParams(template, mesh);
 
-        if (mesh.isSkybox) {
-            const skyProj = mat4.create();
-            computeViewMatrixSkybox(skyProj, viewerInput.camera);
-            mat4.mul(skyProj, viewerInput.camera.projectionMatrix, skyProj);
-            offs += fillMatrix4x4(data, offs, skyProj);
-        } else {
-            offs += fillMatrix4x4(data, offs, viewerInput.camera.clipFromWorldMatrix);
-        }
-
-        const mat = mat4.create();
-        mat4.translate(mat, mat, [pos.x, pos.y, pos.z]);
-        offs += fillMatrix4x3(data, offs, mat);
-
-        offs += fillMatrix4x2(data, offs, mesh.texMatrix);
-        offs += fillMatrix4x2(data, offs, mesh.texMatrix); // TODO second tex
-
-        data[offs++] = +(mesh.texture !== null);
-        data[offs++] = opaque ? 1.0 : 0.0; // eslint-disable-line
-
-        if (this.gfxProgram === null) {
-            this.gfxProgram = this.renderHelper.renderCache.createProgram(this.createProgram());
+        if (mesh.gfxProgram === null) {
+            mesh.gfxProgram = this.renderHelper.renderCache.createProgram(
+                this.createProgram(mesh),
+            );
         }
 
         const sampler = this.renderHelper.renderCache.createSampler({
@@ -409,11 +387,17 @@ class Scene implements Viewer.SceneGfx {
         });
 
         const renderInst = this.renderHelper.renderInstManager.newRenderInst();
-        renderInst.setGfxProgram(this.gfxProgram);
-        renderInst.setSamplerBindings(0, [{
-            gfxTexture: mesh.texture,
-            gfxSampler: sampler,
-        }]);
+        renderInst.setGfxProgram(mesh.gfxProgram);
+        renderInst.setSamplerBindings(0, [
+            {
+                gfxTexture: mesh.texture,
+                gfxSampler: sampler,
+            },
+            {
+                gfxTexture: mesh.texture,
+                gfxSampler: sampler,
+            },
+        ]);
 
         renderInst.setVertexInput(
             mesh.inputLayout,
@@ -450,6 +434,53 @@ class Scene implements Viewer.SceneGfx {
         this.renderHelper.renderInstManager.popTemplate();
 
         return renderInst;
+    }
+
+    private setSceneParams(
+        template: GfxRenderInst,
+        mesh: Mesh,
+        pos:Vertex,
+        viewerInput: Viewer.ViewerRenderInput,
+    ): void {
+        const data = template.allocateUniformBufferF32(Program.ub_SceneParams, (4*4) + (3*4));
+        let offs = 0;
+
+        if (mesh.isSkybox) {
+            const skyProj = mat4.create();
+            computeViewMatrixSkybox(skyProj, viewerInput.camera);
+            mat4.mul(skyProj, viewerInput.camera.projectionMatrix, skyProj);
+            offs += fillMatrix4x4(data, offs, skyProj);
+        } else {
+            offs += fillMatrix4x4(data, offs, viewerInput.camera.clipFromWorldMatrix);
+        }
+        const mat = mat4.create();
+        mat4.translate(mat, mat, [pos.x, pos.y, pos.z]);
+        offs += fillMatrix4x3(data, offs, mat); // eslint-disable-line
+    }
+
+    private setDrawParams(
+        template: GfxRenderInst,
+        mesh: Mesh,
+        opaque: boolean,
+    ): void {
+        const data = template.allocateUniformBufferF32(Program.ub_DrawParams, (2*2*4) + 4);
+        let offs = 0;
+        offs += fillMatrix4x2(data, offs, mesh.texMatrix);
+        offs += fillMatrix4x2(data, offs, mesh.texMatrix); // TODO second tex
+
+        data[offs++] = +(mesh.texture !== null);
+        data[offs++] = opaque ? 1.0 : 0.0; // eslint-disable-line
+    }
+
+    private setCombineParams(
+        template: GfxRenderInst,
+        mesh: Mesh,
+    ): void {
+        const data = template.allocateUniformBufferF32(Program.ub_CombineParams, 8);
+        let offs = 0;
+        offs += fillVec4(data, offs, 1, 1, 1, 1); // SETPRIMCOLOR is never called.
+        // eslint-disable-next-line
+        offs += fillVec4(data, offs, mesh.DP_EnvColor[0], mesh.DP_EnvColor[1], mesh.DP_EnvColor[2], mesh.DP_EnvColor[3]);
     }
 
     public destroy(device: GfxDevice): void {
@@ -502,16 +533,9 @@ class Scene implements Viewer.SceneGfx {
         const enableTexturesCheckbox = new UI.Checkbox('Enable textures', this.shouldEnableTextures);
         enableTexturesCheckbox.onchanged = () => {
             this.shouldEnableTextures = enableTexturesCheckbox.checked;
-            this.gfxProgram = null;
+            this.clearPrograms();
         };
         panel.contents.appendChild(enableTexturesCheckbox.elem);
-
-        const enableVertexColorsCheckbox = new UI.Checkbox('Enable vertex colors', this.shouldEnableVertexColors);
-        enableVertexColorsCheckbox.onchanged = () => {
-            this.shouldEnableVertexColors = enableVertexColorsCheckbox.checked;
-            this.gfxProgram = null;
-        };
-        panel.contents.appendChild(enableVertexColorsCheckbox.elem);
 
         const renderSkyboxCheckbox = new UI.Checkbox('Render skybox ', this.shouldRenderSkybox);
         renderSkyboxCheckbox.onchanged = () => {
@@ -532,6 +556,13 @@ class Scene implements Viewer.SceneGfx {
         panel.contents.appendChild(renderTranslucentCheckbox.elem);
 
         return panel;
+    }
+
+    private clearPrograms(): void {
+        this.rooms.forEach(room => {
+            room.opaque.forEach(mesh => mesh.gfxProgram = null);
+            room.translucent.forEach(mesh => mesh.gfxProgram = null);
+        });
     }
 }
 

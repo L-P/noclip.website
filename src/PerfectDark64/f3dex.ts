@@ -1,7 +1,7 @@
 import * as F3DEX from "../BanjoKazooie/f3dex";
 import * as RDP from "../Common/N64/RDP";
 import { AABB } from "../Geometry";
-import { GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxCullMode, GfxDevice, GfxFormat, GfxInputLayout, GfxTexture, GfxVertexBufferFrequency, GfxWrapMode, } from "../gfx/platform/GfxPlatform";
+import { GfxProgram, GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxCullMode, GfxDevice, GfxFormat, GfxInputLayout, GfxTexture, GfxVertexBufferFrequency, GfxWrapMode, } from "../gfx/platform/GfxPlatform";
 import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { ReadonlyVec3, vec4, mat4 } from "gl-matrix";
 import { calcTextureMatrixFromRSPState } from '../Common/N64/RSP.js';
@@ -192,6 +192,17 @@ export class Mesh {
     public wrapT: GfxWrapMode = GfxWrapMode.Repeat;
     public aabb: AABB;
     public texMatrix: mat4 = mat4.create();
+    public gfxProgram: GfxProgram|null = null;
+
+    public DP_OtherModeH: number = 0;
+    public DP_OtherModeL: number = 0;
+    public DP_EnvColor = vec4.create();
+    public DP_Combine: RDP.CombineParams = {
+        c0: { a: RDP.CCMUX.TEXEL0, b: RDP.CCMUX.ADD_ZERO, c: RDP.CCMUX.PRIMITIVE, d: RDP.CCMUX.ADD_ZERO },
+        c1: { a: RDP.CCMUX.TEXEL0, b: RDP.CCMUX.ADD_ZERO, c: RDP.CCMUX.PRIMITIVE, d: RDP.CCMUX.ADD_ZERO },
+        a0: { a: RDP.ACMUX.TEXEL0, b: RDP.ACMUX.ZERO,     c: RDP.ACMUX.PRIMITIVE, d: RDP.ACMUX.ZERO     },
+        a1: { a: RDP.ACMUX.TEXEL0, b: RDP.ACMUX.ZERO,     c: RDP.ACMUX.PRIMITIVE, d: RDP.ACMUX.ZERO     },
+    };
 
     // Set by and for the renderer and the code around it, not the interpreter.
     public sortKeyBase: number;
@@ -221,6 +232,11 @@ export class MeshBuilder {
     public wrapT: GfxWrapMode;
     public aabb: AABB = new AABB();
     public texMatrix: mat4 = mat4.create();
+
+    public DP_EnvColor = vec4.create();
+    public DP_Combine: RDP.CombineParams;
+    public DP_OtherModeH: number = 0;
+    public DP_OtherModeL: number = 0;
 
     public vtxToIndex: Map<string, number> = new Map();
 
@@ -256,6 +272,11 @@ export class MeshBuilder {
         mesh.wrapT = this.wrapT;
         mesh.aabb = this.aabb;
         mesh.texMatrix = this.texMatrix;
+        mesh.DP_Combine = this.DP_Combine;
+        mesh.DP_OtherModeH = this.DP_OtherModeH;
+        mesh.DP_OtherModeL = this.DP_OtherModeL;
+
+        vec4.copy(mesh.DP_EnvColor, this.DP_EnvColor);
 
         const vertexArray = new Float32Array(this.vertices.length * computedVertexElementsCount);
         this.vertices.forEach((v, i) => {
@@ -295,7 +316,7 @@ export class MeshBuilder {
                     bufferIndex: 0,
                 },
                 {
-                    location: Program.a_VertexColors,
+                    location: Program.a_VertexColor,
                     format: GfxFormat.F32_RGBA,
                     bufferByteOffset: 5*4,
                     bufferIndex: 0,
@@ -355,12 +376,17 @@ export class Interpreter {
 
     private flush() {
         if (this.cur !== null) {
+            this.cur.DP_Combine = RDP.decodeCombineParams(this.DP_CombineH, this.DP_CombineL);
+            vec4.copy(this.cur.DP_EnvColor, this.DP_EnvColor);
+            this.cur.DP_OtherModeH = this.DP_OtherModeH;
+            this.cur.DP_OtherModeL = this.DP_OtherModeL;
+
             this.cur.SP_GeometryMode = this.SP_GeometryMode;
             const tile = this.DP_TileState[this.SP_TextureState.tile];
             this.cur.wrapT = texModeToGfx(tile.cmt);
             this.cur.wrapS = texModeToGfx(tile.cms);
 
-            if (this.cur.textureNumber !== null) {
+            if (this.SP_TextureState.on && this.cur.textureNumber !== null) {
                 const meta: tex.InflatedTexture = this.textureCache.getMetadata(this.cur.textureNumber)!;
                 calcTextureMatrixFromRSPState(
                     this.cur.texMatrix,
@@ -468,14 +494,14 @@ export class Interpreter {
                 break;
 
             case Command.G_SETOTHERMODE_H: {
-                const len = ((gfx.w0 >>> 0) & 0xFF) + 1;
-                const sft = 0x20 - ((gfx.w0 >>> 8) & 0xFF) - len;
+                const len = (gfx.w0 >>> 0) & 0xFF;
+                const sft = (gfx.w0 >>> 8) & 0xFF;
                 this.gDPSetOtherModeH(sft, len, gfx.w1);
             } break;
 
             case Command.G_SETOTHERMODE_L: {
-                const len = ((gfx.w0 >>> 0) & 0xFF) + 1;
-                const sft = 0x20 - ((gfx.w0 >>> 8) & 0xFF) - len;
+                const len = (gfx.w0 >>> 0) & 0xFF;
+                const sft = (gfx.w0 >>> 8) & 0xFF;
                 this.gDPSetOtherModeL(sft, len, gfx.w1);
             } break;
 
@@ -609,25 +635,17 @@ export class Interpreter {
 
     public gDPSetOtherModeL(sft: number, len: number, w1: number): void {
         const mask = ((1 << len) - 1) << sft;
-        const DP_OtherModeL = (this.DP_OtherModeL & ~mask) | (w1 & mask);
-        if (DP_OtherModeL !== this.DP_OtherModeL) {
-            this.DP_OtherModeL = DP_OtherModeL;
-        }
+        this.DP_OtherModeL = (this.DP_OtherModeL & ~mask) | (w1 & mask);
     }
 
     public gDPSetOtherModeH(sft: number, len: number, w1: number): void {
         const mask = ((1 << len) - 1) << sft;
-        const DP_OtherModeH = (this.DP_OtherModeH & ~mask) | (w1 & mask);
-        if (DP_OtherModeH !== this.DP_OtherModeH) {
-            this.DP_OtherModeH = DP_OtherModeH;
-        }
+        this.DP_OtherModeH = (this.DP_OtherModeH & ~mask) | (w1 & mask);
     }
 
     public gDPSetCombine(w0: number, w1: number): void {
-        if (this.DP_CombineH !== w0 || this.DP_CombineL !== w1) {
-            this.DP_CombineH = w0;
-            this.DP_CombineL = w1;
-        }
+        this.DP_CombineH = w0;
+        this.DP_CombineL = w1;
     }
 
     public gSPSetEnvColor(r: number, g: number, b: number, a: number) {

@@ -1,6 +1,7 @@
 import * as UI from "../ui";
 import * as Viewer from "../viewer";
 import ArrayBufferSlice from "../ArrayBufferSlice";
+import { CalcBillboardFlags, calcBillboardMatrix, clamp, lerp, MathConstants, scaleMatrix, Vec3UnitY, Vec3Zero } from '../MathHelpers.js';
 import { AABB } from "../Geometry";
 import { GfxBlendFactor, GfxBlendMode, GfxDevice, GfxFormat, GfxMipFilterMode, GfxTexFilterMode, makeTextureDescriptor2D, GfxMegaStateDescriptor } from "../gfx/platform/GfxPlatform";
 import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
@@ -13,7 +14,7 @@ import { fillVec4, fillMatrix4x2, fillMatrix4x3, fillMatrix4x4 } from "../gfx/he
 import { hexzero0x } from "../util";
 import { makeBackbufferDescSimple, makeAttachmentClearDescriptor, opaqueBlackFullClearRenderPassDescriptor, standardFullClearRenderPassDescriptor } from '../gfx/helpers/RenderGraphHelpers.js';
 import { setSortKeyDepth, makeSortKey, GfxRendererLayer, GfxRenderInst, GfxRenderInstList, gfxRenderInstCompareSortKey, GfxRenderInstExecutionOrder } from "../gfx/render/GfxRenderInstManager";
-import { vec3, mat4 } from "gl-matrix";
+import { vec3, mat4, quat } from "gl-matrix";
 import { setAttachmentStateSimple } from '../gfx/helpers/GfxMegaStateDescriptorHelpers';
 import { drawWorldSpaceAABB, drawWorldSpaceLocator, drawScreenSpaceText, drawWorldSpaceText, getDebugOverlayCanvas2D } from '../DebugJunk'
 
@@ -103,7 +104,12 @@ class Scene implements Viewer.SceneGfx {
     }
 
     private createProgram(mesh: Mesh): Program {
-        const ret = new Program(mesh.DP_Combine, mesh.DP_OtherModeL, mesh.DP_OtherModeH);
+        const ret = new Program(
+            mesh.DP_Combine,
+            mesh.SP_GeometryMode,
+            mesh.DP_OtherModeL,
+            mesh.DP_OtherModeH,
+        );
 
         if (this.shouldEnableTextures) {
             ret.defines.set('ENABLE_TEXTURES', '1');
@@ -176,6 +182,7 @@ class Scene implements Viewer.SceneGfx {
         const builder = this.renderHelper.renderGraph.newGraphBuilder();
 
         this.handleHacksAndRoomIDs(viewerInput);
+        this.updateTextureGenLookAt(viewerInput.camera.viewMatrix);
 
         this.renderSkybox(viewerInput);
         this.renderSceneRooms(this.rooms, viewerInput);
@@ -442,7 +449,7 @@ class Scene implements Viewer.SceneGfx {
         pos:Vertex,
         viewerInput: Viewer.ViewerRenderInput,
     ): void {
-        const data = template.allocateUniformBufferF32(Program.ub_SceneParams, (4*4) + (3*4));
+        const data = template.allocateUniformBufferF32(Program.ub_SceneParams, (4*4) + (3*4) + (2*2*4));
         let offs = 0;
 
         if (mesh.isSkybox) {
@@ -455,7 +462,18 @@ class Scene implements Viewer.SceneGfx {
         }
         const mat = mat4.create();
         mat4.translate(mat, mat, [pos.x, pos.y, pos.z]);
-        offs += fillMatrix4x3(data, offs, mat); // eslint-disable-line
+        offs += fillMatrix4x3(data, offs, mat);
+
+        offs += fillVec4(data, offs, this.textureGenLookAt[0], this.textureGenLookAt[4], this.textureGenLookAt[8]);
+        offs += fillVec4(data, offs, this.textureGenLookAt[1], this.textureGenLookAt[5], this.textureGenLookAt[9]); // eslint-disable-line
+    }
+
+    // G_TEXTURE_GEN lookat vectors, should only move with camera rotation, not position.
+    private textureGenLookAt = mat4.create();
+    private updateTextureGenLookAt(viewMatrix: mat4) {
+        const rot = quat.create();
+        mat4.getRotation(rot, viewMatrix);
+        mat4.fromRotationTranslation(this.textureGenLookAt, rot, vec3.create());
     }
 
     private setDrawParams(

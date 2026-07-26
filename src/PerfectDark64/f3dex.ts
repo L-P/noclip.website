@@ -112,7 +112,7 @@ export enum Segment {
     BGDL      = 15,
 }
 
-enum GeometryMode {
+export enum GeometryMode {
     G_ZBUFFER            = 0x00000001,
     G_SHADE              = 0x00000004,
     G_TEXTURE_ENABLE     = 0x00000002,
@@ -194,6 +194,7 @@ export class Mesh {
     public texMatrix: mat4 = mat4.create();
     public gfxProgram: GfxProgram|null = null;
 
+    public SP_GeometryMode: number = 0;
     public DP_OtherModeH: number = 0;
     public DP_OtherModeL: number = 0;
     public DP_EnvColor = vec4.create();
@@ -275,6 +276,7 @@ export class MeshBuilder {
         mesh.DP_Combine = this.DP_Combine;
         mesh.DP_OtherModeH = this.DP_OtherModeH;
         mesh.DP_OtherModeL = this.DP_OtherModeL;
+        mesh.SP_GeometryMode = this.SP_GeometryMode;
 
         vec4.copy(mesh.DP_EnvColor, this.DP_EnvColor);
 

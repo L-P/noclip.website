@@ -1,8 +1,10 @@
+import * as RDP from "../Common/N64/RDP";
+import { CombineParams } from '../Common/N64/RDP.js';
 import { DeviceProgram } from "../Program";
 import { GfxShaderLibrary } from "../gfx/helpers/GfxShaderLibrary";
 import { TextFilt } from '../Common/N64/Image.js';
-import { CombineParams } from '../Common/N64/RDP.js';
-import * as RDP from "../Common/N64/RDP";
+
+import { GeometryMode } from './f3dex.js';
 
 // FIXME: Parts of this are c/c from BanjoKazooie.
 export class Program extends DeviceProgram {
@@ -15,6 +17,7 @@ export class Program extends DeviceProgram {
 
     constructor(
         combine: CombineParams,
+        SP_GeometryMode: number,
         private DP_OtherModeL: number,
         private DP_OtherModeH: number,
     ) {
@@ -22,6 +25,14 @@ export class Program extends DeviceProgram {
 
         if (RDP.getCycleTypeFromOtherModeH(DP_OtherModeH) === RDP.OtherModeH_CycleType.G_CYC_2CYCLE) {
             this.defines.set("TWO_CYCLE", "1");
+        }
+
+        if (SP_GeometryMode & GeometryMode.G_TEXTURE_GEN) {
+            this.defines.set("TEXTURE_GEN", "1");
+        }
+
+        if (SP_GeometryMode & GeometryMode.G_TEXTURE_GEN_LINEAR) {
+            this.defines.set("TEXTURE_GEN_LINEAR", "1");
         }
 
         this.frag = this.generateFrag(combine);
@@ -187,6 +198,7 @@ export class Program extends DeviceProgram {
         layout(std140) uniform ub_SceneParams {
             Mat4x4 u_ClipFromWorld;
             Mat3x4 u_WorldFromLocal;
+            vec4 u_LookAtVectors[2];
         };
 
         layout(std140) uniform ub_DrawParams {
@@ -218,15 +230,36 @@ export class Program extends DeviceProgram {
         layout(location = ${Program.a_TexCoord}) in vec2 a_TexCoord;
         layout(location = ${Program.a_VertexColor}) in vec4 a_VertexColor;
 
+        // Convert from 0...1 UNORM range to SNORM range
+        vec3 ConvertToSignedInt(vec3 t_Input) {
+            ivec3 t_Num = ivec3(t_Input * 255.0);
+            // Sign extend
+            t_Num = t_Num << 24 >> 24;
+            return vec3(t_Num) / 127.0;
+        }
+
         void main() {
             vec3 t_PositionWorld = (UnpackMatrix(u_WorldFromLocal) * vec4(a_Position.xyz, 1.0f)).xyz;
 
             gl_Position = UnpackMatrix(u_ClipFromWorld) * vec4(t_PositionWorld, 1.0f);
+            v_VertexColor = a_VertexColor;
 
             v_TexCoord.xy = UnpackMatrix(u_TexMatrix[0]) * vec4(a_TexCoord, 1.0, 1.0);
             v_TexCoord.zw = UnpackMatrix(u_TexMatrix[1]) * vec4(a_TexCoord, 1.0, 1.0);
 
-            v_VertexColor = a_VertexColor;
+            #ifdef TEXTURE_GEN
+                vec4 t_Normal = vec4(ConvertToSignedInt(a_VertexColor.rgb), 0.0);
+                t_Normal.xy = vec2(dot(t_Normal, u_LookAtVectors[0]), dot(t_Normal, u_LookAtVectors[1]));
+
+                #ifdef TEXTURE_GEN_LINEAR
+                    v_TexCoord.xy = acos(t_Normal.xy)/radians(180.0);
+                #else
+                    v_TexCoord.xy = (t_Normal.xy + vec2(1.0))/2.0;
+                #endif
+
+                v_TexCoord.zw = v_TexCoord.xy;
+                v_VertexColor = vec4(1.0, 1.0, 1.0, 1.0);
+            #endif
         }
     `;
 }
